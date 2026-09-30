@@ -87,24 +87,46 @@ class ProblemAnalyzer:
 
         try:
             if is_gemini:
-                model_name = settings.LLM_MODEL or "gemini-3.5-flash-lite"
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.LLM_API_KEY}"
-                payload = {
-                    "contents": [{"parts": [{"text": prompt_system}]}],
-                    "generationConfig": {
-                        "responseMimeType": "application/json",
-                        "temperature": 0.2
+                model_name = settings.LLM_MODEL or "gemini-3.8-flash"
+                try:
+                    from google import genai
+                    from google.genai import types
+                    client = genai.Client(api_key=settings.LLM_API_KEY)
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt_system,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.2
+                        )
+                    )
+                    raw_text = response.text.strip()
+                    if raw_text.startswith("```json"):
+                        raw_text = raw_text.replace("```json", "", 1).rstrip("`").strip()
+                    elif raw_text.startswith("```"):
+                        raw_text = raw_text.replace("```", "", 1).rstrip("`").strip()
+                    parsed = json.loads(raw_text)
+                    return cls._format_response(parsed, query)
+                except Exception as sdk_err:
+                    logger.info(f"Gemini SDK call note: {sdk_err}, attempting REST fallback...")
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.LLM_API_KEY}"
+                    payload = {
+                        "contents": [{"parts": [{"text": prompt_system}]}],
+                        "generationConfig": {
+                            "responseMimeType": "application/json",
+                            "temperature": 0.2
+                        }
                     }
-                }
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    res = await client.post(url, json=payload)
-                    if res.status_code == 200:
-                        data = res.json()
-                        raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-                        parsed = json.loads(raw_text)
-                        return cls._format_response(parsed, query)
-                    else:
-                        logger.warning(f"Gemini API returned status {res.status_code}: {res.text[:200]}")
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        res = await client.post(url, json=payload)
+                        if res.status_code == 200:
+                            data = res.json()
+                            raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+                            parsed = json.loads(raw_text)
+                            return cls._format_response(parsed, query)
+                        else:
+                            logger.warning(f"Gemini REST returned status {res.status_code}: {res.text[:200]}")
+
             else:
                 base_url = settings.LLM_BASE_URL or "https://api.openai.com/v1"
                 headers = {
