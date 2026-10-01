@@ -35,6 +35,9 @@ def get_search_suggestions(
     return suggest_locations(query, limit=limit)
 
 
+from app.models.enums import ServiceApprovalStatus
+
+
 @router.get("/nearby")
 @router.get("/nearby/")
 def get_nearby_providers(
@@ -42,87 +45,66 @@ def get_nearby_providers(
     longitude: float = Query(..., description="User longitude"),
     service_id: Optional[int] = Query(None, description="Filter by service ID"),
     radius_km: float = Query(15.0, description="Search radius in kilometers"),
-    auto_locate: bool = Query(True, description="Automatically ensure providers are available in any searched location"),
     db: Session = Depends(get_db)
 ):
     """
-    Search nearby providers offering a specific service within a given radius using Haversine distance.
+    Search nearby providers offering approved and active services within radius_km using Haversine distance.
     Returns: provider name, provider ID, service_id, latitude, longitude, distance, rating, availability, price.
-    If no providers exist near this location, automatically positions verified providers around the coordinates
-    so that ANY city or address searched works seamlessly.
+    Uses real PostgreSQL/database coordinates with zero artificial shifts.
     """
-    def _fetch_nearby():
-        query = db.query(Provider).filter(
+    query = (
+        db.query(Provider, ProviderService)
+        .join(ProviderService, Provider.id == ProviderService.provider_id)
+        .join(User, Provider.user_id == User.id)
+        .filter(
+            User.is_active == True,
             Provider.is_available == True,
             Provider.latitude.isnot(None),
-            Provider.longitude.isnot(None)
+            Provider.longitude.isnot(None),
+            ProviderService.is_active == True,
+            ProviderService.status == ServiceApprovalStatus.APPROVED
         )
+    )
 
-        if service_id:
-            query = query.join(ProviderService).filter(
-                ProviderService.service_id == service_id,
-                ProviderService.is_active == True
-            )
 
-        providers = query.all()
-        nearby = []
+    if service_id:
+        query = query.filter(ProviderService.service_id == service_id)
 
-        for p in providers:
-            dist = haversine_distance(latitude, longitude, p.latitude, p.longitude)
-            if dist <= radius_km:
-                user = db.query(User).filter(User.id == p.user_id).first()
-                
-                price = 500.0
-                service_name = "General Service"
-                active_service_id = service_id
-                if service_id:
-                    ps = db.query(ProviderService).filter(
-                        ProviderService.provider_id == p.id,
-                        ProviderService.service_id == service_id
-                    ).first()
-                    if ps:
-                        price = ps.custom_price
-                    svc = db.query(Service).filter(Service.id == service_id).first()
-                    if svc:
-                        service_name = svc.name
-                else:
-                    first_ps = db.query(ProviderService).filter(ProviderService.provider_id == p.id).first()
-                    if first_ps:
-                        price = first_ps.custom_price
-                        active_service_id = first_ps.service_id
-                        svc = db.query(Service).filter(Service.id == first_ps.service_id).first()
-                        if svc:
-                            service_name = svc.name
-                    else:
-                        first_svc = db.query(Service).first()
-                        active_service_id = first_svc.id if first_svc else 1
+    pairs = query.all()
+    nearby = []
+    seen_providers = set()
 
-                nearby.append({
-                    "provider_id": p.id,
-                    "provider_name": p.business_name or (user.full_name if user else "Provider"),
-                    "service": service_name,
-                    "service_id": active_service_id,
-                    "latitude": p.latitude,
-                    "longitude": p.longitude,
-                    "distance": dist,
-                    "rating": p.rating_avg or 4.8,
-                    "total_ratings": p.total_ratings or 15,
-                    "availability": "Available Today" if p.is_available else "Busy",
-                    "price": price,
-                    "address": p.address or "Verified Service Center"
-                })
+    for provider, ps in pairs:
+        # Avoid duplicate provider cards when no service filter is passed
+        if not service_id and provider.id in seen_providers:
+            continue
+        seen_providers.add(provider.id)
 
-        nearby.sort(key=lambda x: x["distance"])
-        return nearby
+        dist = haversine_distance(latitude, longitude, provider.latitude, provider.longitude)
+        if dist <= radius_km:
+            user = db.query(User).filter(User.id == provider.user_id).first()
+            svc = db.query(Service).filter(Service.id == ps.service_id).first()
+            svc_name = ps.custom_service_name or (svc.name if svc else "General Service")
 
-    results = _fetch_nearby()
+            nearby.append({
+                "provider_id": provider.id,
+                "provider_service_id": ps.id,
+                "provider_name": provider.business_name or (user.full_name if user else "Provider"),
+                "service": svc_name,
+                "service_id": ps.service_id,
+                "latitude": float(provider.latitude),
+                "longitude": float(provider.longitude),
+                "distance": round(dist, 2),
+                "rating": float(provider.rating_avg or 4.8),
+                "total_ratings": int(provider.total_ratings or 15),
+                "availability": "Available Today" if provider.is_available else "Busy",
+                "price": float(ps.custom_price or (svc.base_price if svc else 500.0)),
+                "address": provider.address or "Verified Service Center"
+            })
 
-    # If no providers or very few exist in this region and auto_locate is True, relocate providers around this location
-    if len(results) < 2 and auto_locate:
-        relocate_providers_around(db, latitude, longitude)
-        results = _fetch_nearby()
+    nearby.sort(key=lambda x: x["distance"])
+    return nearby
 
-    return results
 
 
 @router.post("/sync-demo-providers")

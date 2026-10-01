@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import L from 'leaflet';
 import { api } from '../api/client';
 import {
   MapPin,
   Navigation,
-  Sliders,
   Star,
   CheckCircle,
   Calendar,
@@ -15,10 +14,17 @@ import {
   AlertCircle,
   Compass,
   Search,
-  ArrowRight
+  ArrowRight,
+  ExternalLink,
+  ShieldCheck,
+  AlertTriangle,
+  Layers,
+  Check
 } from 'lucide-react';
 
-// Fix standard Leaflet default marker icon paths in bundled environments
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+
+// Leaflet default icon fix for bundled environments
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
@@ -26,8 +32,8 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
 
-// Custom user location icon (Red Pin)
-const userIcon = new L.Icon({
+// Custom Leaflet Pins
+const leafletUserIcon = new L.Icon({
   iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
   iconSize: [25, 41],
@@ -36,8 +42,7 @@ const userIcon = new L.Icon({
   shadowSize: [41, 41]
 });
 
-// Custom provider icon (Blue Pin)
-const providerIcon = new L.Icon({
+const leafletProviderIcon = new L.Icon({
   iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
   iconSize: [25, 41],
@@ -50,35 +55,43 @@ export default function Maps() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
+  // Container refs
   const mapContainerRef = useRef(null);
-  const mapInstanceRef = useRef(null);
-  const markersLayerRef = useRef(null);
-  const providerMarkersRef = useRef({});
-  const nearbyProvidersRef = useRef([]);
+  
+  // Active map engine: 'google' or 'leaflet'
+  const [mapEngine, setMapEngine] = useState('google');
+  const [googleMapsLoaded, setGoogleMapsLoaded] = useState(false);
+  const [googleMapsError, setGoogleMapsError] = useState(null);
+  const [loadingGoogleSdk, setLoadingGoogleSdk] = useState(false);
 
-  // Default initial location: Mumbai (or auto-detected)
-  const [userLocation, setUserLocation] = useState({
-    latitude: 19.0760,
-    longitude: 72.8777,
-    name: 'Mumbai, Maharashtra',
-    isRealGps: false,
-    accuracy: null,
-  });
+  // References for Google Map objects
+  const googleMapInstanceRef = useRef(null);
+  const googleMarkersRef = useRef([]);
+  const googleUserMarkerRef = useRef(null);
+  const googleCircleRef = useRef(null);
+  const googleInfoWindowsRef = useRef({});
+  const googleActiveInfoWindowRef = useRef(null);
 
+  // References for Leaflet Map objects
+  const leafletMapInstanceRef = useRef(null);
+  const leafletMarkersLayerRef = useRef(null);
+  const leafletProviderMarkersRef = useRef({});
+
+  // Location state - starts EMPTY per requirement 4
+  const [userLocation, setUserLocation] = useState(null);
   const [locationSearchInput, setLocationSearchInput] = useState('');
   const [searchingLocation, setSearchingLocation] = useState(false);
+  const [geoLocating, setGeoLocating] = useState(false);
+  const [geoError, setGeoError] = useState(null);
 
+  // Filter state
   const [services, setServices] = useState([]);
   const [selectedServiceId, setSelectedServiceId] = useState(searchParams.get('service') || '');
   const [radiusKm, setRadiusKm] = useState(15);
   const [nearbyProviders, setNearbyProviders] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [geoLocating, setGeoLocating] = useState(false);
-  const [geoError, setGeoError] = useState(null);
-  const [syncingDemo, setSyncingDemo] = useState(false);
-  const [syncSuccessMsg, setSyncSuccessMsg] = useState('');
+  const [loadingProviders, setLoadingProviders] = useState(false);
 
-  // In-page Booking Modal State
+  // In-page Booking Modal state
   const [bookingProvider, setBookingProvider] = useState(null);
   const [bookingDate, setBookingDate] = useState(() => {
     const tomorrow = new Date();
@@ -86,911 +99,1316 @@ export default function Maps() {
     return tomorrow.toISOString().split('T')[0];
   });
   const [bookingTime, setBookingTime] = useState('10:00');
-  const [serviceAddress, setServiceAddress] = useState('Sector 4, Central Area');
+  const [serviceAddress, setServiceAddress] = useState('');
   const [specialInstructions, setSpecialInstructions] = useState('');
   const [bookingSubmitting, setBookingSubmitting] = useState(false);
   const [bookingSuccess, setBookingSuccess] = useState(false);
   const [bookingError, setBookingError] = useState('');
 
-  // Synchronize nearbyProvidersRef so Leaflet HTML popups can trigger modal
+  // Synchronize providers ref for window trigger callbacks
+  const nearbyProvidersRef = useRef([]);
   useEffect(() => {
     nearbyProvidersRef.current = nearbyProviders;
   }, [nearbyProviders]);
 
-  // Expose global callback for Leaflet popup "Book Now" buttons
+  // Global window booking trigger used in HTML popups (both Google and Leaflet)
   useEffect(() => {
-    window.triggerBookNow = (providerId) => {
+    window.triggerMarketplaceBooking = (providerId) => {
       const p = nearbyProvidersRef.current.find(item => item.provider_id === providerId);
       if (p) {
         setBookingProvider(p);
         setBookingSuccess(false);
         setBookingError('');
-        setServiceAddress(`Apartment 4B, ${userLocation.name.split(',')[0]}`);
+        setServiceAddress(userLocation ? userLocation.name : '');
       }
     };
 
     return () => {
-      delete window.triggerBookNow;
+      delete window.triggerMarketplaceBooking;
     };
   }, [userLocation]);
 
-  // Load available services for filter dropdown
+  // Load available approved services for dropdown
   useEffect(() => {
-    api.get('/services')
+    api.get('/services', { only_active_providers: true })
       .then(setServices)
-      .catch(console.error);
+      .catch(err => console.error('Failed to load services for maps filter:', err));
   }, []);
 
-  // Initialize Leaflet Map
+  // 1. Attempt loading Google Maps JavaScript API with timeout
   useEffect(() => {
-    if (!mapContainerRef.current) return;
-
-    if (!mapInstanceRef.current) {
-      const map = L.map(mapContainerRef.current).setView(
-        [userLocation.latitude, userLocation.longitude],
-        12
-      );
-
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors',
-        maxZoom: 19,
-      }).addTo(map);
-
-      markersLayerRef.current = L.layerGroup().addTo(map);
-      mapInstanceRef.current = map;
+    if (!GOOGLE_MAPS_API_KEY) {
+      console.log('No Google Maps key found in frontend .env; using Leaflet OpenStreetMap engine.');
+      setMapEngine('leaflet');
+      return;
     }
 
-    return () => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
+    if (window.google && window.google.maps) {
+      setGoogleMapsLoaded(true);
+      setMapEngine('google');
+      return;
+    }
+
+    setLoadingGoogleSdk(true);
+    let timeoutId;
+
+    // Google Maps Auth Failure hook
+    window.gm_authFailure = () => {
+      console.warn('Google Maps authentication failure. Falling back to Leaflet/OpenStreetMap.');
+      setGoogleMapsError('Google Maps API key restriction or authorization notice. Switched to OpenStreetMap for guaranteed map visibility.');
+      setMapEngine('leaflet');
+    };
+
+    const existingScript = document.getElementById('google-maps-js-sdk');
+    if (existingScript) existingScript.remove();
+
+    const script = document.createElement('script');
+    script.id = 'google-maps-js-sdk';
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places,geometry`;
+    script.async = true;
+    script.defer = true;
+
+    script.onload = () => {
+      clearTimeout(timeoutId);
+      setLoadingGoogleSdk(false);
+      if (window.google && window.google.maps) {
+        setGoogleMapsLoaded(true);
+        setMapEngine('google');
+      } else {
+        setGoogleMapsError('Google Maps loaded but maps object unavailable.');
+        setMapEngine('leaflet');
       }
+    };
+
+    script.onerror = () => {
+      clearTimeout(timeoutId);
+      setLoadingGoogleSdk(false);
+      console.warn('Google Maps script network error. Falling back to Leaflet/OpenStreetMap.');
+      setGoogleMapsError('Google Maps network connection error. Switched to OpenStreetMap for guaranteed map display.');
+      setMapEngine('leaflet');
+    };
+
+    // 6-second timeout fallback: if Google Maps hangs or is blocked, switch to Leaflet so user NEVER sees a blank screen!
+    timeoutId = setTimeout(() => {
+      if (!window.google || !window.google.maps) {
+        setLoadingGoogleSdk(false);
+        console.warn('Google Maps connection timed out. Falling back to OpenStreetMap.');
+        setGoogleMapsError('Google Maps took too long to connect. Switched to OpenStreetMap for instant map display.');
+        setMapEngine('leaflet');
+      }
+    }, 6000);
+
+    document.head.appendChild(script);
+
+    return () => {
+      clearTimeout(timeoutId);
     };
   }, []);
 
-  // Fetch nearby providers whenever location, service, or radius changes
-  useEffect(() => {
-    fetchNearbyProviders(userLocation);
-  }, [userLocation, selectedServiceId, radiusKm]);
-
-  const fetchNearbyProviders = async (coords = userLocation) => {
-    setLoading(true);
+  // 2. Fetch Nearby Approved Providers from Backend using Haversine
+  const fetchNearbyProviders = useCallback(async (coords) => {
+    if (!coords) return;
+    setLoadingProviders(true);
     try {
       const params = {
         latitude: coords.latitude,
         longitude: coords.longitude,
         radius_km: radiusKm,
-        auto_locate: true,
       };
       if (selectedServiceId) {
         params.service_id = selectedServiceId;
       }
 
-      const providers = await api.get('/maps/nearby', params);
-      setNearbyProviders(providers);
-      updateMapMarkers(coords, providers);
+      const data = await api.get('/maps/nearby', params);
+      setNearbyProviders(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Error fetching nearby providers:', err);
+      setNearbyProviders([]);
     } finally {
-      setLoading(false);
+      setLoadingProviders(false);
     }
-  };
+  }, [radiusKm, selectedServiceId]);
 
-  const updateMapMarkers = (coords, providers) => {
-    if (!mapInstanceRef.current || !markersLayerRef.current) return;
+  // Refetch when location, service filter, or radius changes
+  useEffect(() => {
+    if (userLocation) {
+      fetchNearbyProviders(userLocation);
+    }
+  }, [userLocation, fetchNearbyProviders]);
 
-    markersLayerRef.current.clearLayers();
-    providerMarkersRef.current = {};
+  // 3. Render Leaflet Map Engine
+  const renderLeafletMap = useCallback(() => {
+    if (!mapContainerRef.current) return;
 
-    // 1. Add User marker (Red)
-    const userMarker = L.marker([coords.latitude, coords.longitude], { icon: userIcon })
-      .bindPopup(`
-        <div style="font-family: inherit; font-size: 0.9rem; line-height: 1.4;">
-          <b style="color: #ef4444;">📍 Selected Location</b><br/>
-          <span>${coords.name}</span><br/>
-          <span style="font-size: 0.8rem; color: #64748b;">GPS: ${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}</span><br/>
-          <span style="font-size: 0.75rem; color: #2563eb;">Search Radius: ${radiusKm} km</span>
-        </div>
-      `);
-    markersLayerRef.current.addLayer(userMarker);
-    // Automatically open popup so user immediately sees the location opened on the map
-    userMarker.openPopup();
+    // Clean up Google Map if present in DOM
+    if (googleMapInstanceRef.current) {
+      googleMapInstanceRef.current = null;
+    }
 
-    // 2. Add Search Radius Circle (Blue semi-transparent)
-    const radiusCircle = L.circle([coords.latitude, coords.longitude], {
-      color: '#2563eb',
-      fillColor: '#3b82f6',
-      fillOpacity: 0.08,
-      weight: 1.5,
-      radius: radiusKm * 1000
-    });
-    markersLayerRef.current.addLayer(radiusCircle);
+    const defaultCenter = userLocation
+      ? [userLocation.latitude, userLocation.longitude]
+      : [20.5937, 78.9629]; // India national center for clean overview if no location set yet
+    const defaultZoom = userLocation ? 13 : 5;
 
-    // 3. Add Provider Markers (Blue)
-    const bounds = L.latLngBounds([[coords.latitude, coords.longitude]]);
+    if (!leafletMapInstanceRef.current) {
+      mapContainerRef.current.innerHTML = '';
+      const map = L.map(mapContainerRef.current, {
+        center: defaultCenter,
+        zoom: defaultZoom,
+        zoomControl: true,
+      });
 
-    providers.forEach((p) => {
-      if (p.latitude && p.longitude) {
-        bounds.extend([p.latitude, p.longitude]);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19,
+      }).addTo(map);
 
-        const popupContent = `
-          <div style="font-family: inherit; min-width: 220px; padding: 4px;">
-            <div style="font-weight: 700; font-size: 1.05rem; margin-bottom: 2px; color: #0f172a;">${p.provider_name}</div>
-            <div style="color: #2563eb; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">${p.service}</div>
-            <div style="display: flex; gap: 8px; font-size: 0.8rem; color: #475569; margin-bottom: 4px;">
-              <span>⭐ ${p.rating}</span>
-              <span>•</span>
-              <span style="font-weight: 600; color: #0f172a;">📍 ${p.distance} km away</span>
-            </div>
-            <div style="font-size: 0.8rem; color: #059669; font-weight: 600; margin-bottom: 8px;">
-              ${p.availability} • ₹${p.price}
-            </div>
-            <div style="display: flex; gap: 6px; margin-top: 8px;">
-              <a href="/providers/${p.provider_id}" style="flex: 1; text-align: center; background: #f1f5f9; color: #0f172a; padding: 5px 8px; border-radius: 6px; font-size: 0.8rem; text-decoration: none; font-weight: 600; border: 1px solid #cbd5e1;">View Profile</a>
-              <button onclick="window.triggerBookNow(${p.provider_id})" style="flex: 1; text-align: center; background: #2563eb; color: #fff; padding: 5px 8px; border-radius: 6px; font-size: 0.8rem; border: none; cursor: pointer; font-weight: 600;">Book Now</button>
-            </div>
-          </div>
-        `;
-
-        const marker = L.marker([p.latitude, p.longitude], { icon: providerIcon })
-          .bindPopup(popupContent);
-        markersLayerRef.current.addLayer(marker);
-        providerMarkersRef.current[p.provider_id] = marker;
-      }
-    });
-
-    // Fit map bounds safely
-    if (providers.length > 0) {
-      mapInstanceRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+      leafletMarkersLayerRef.current = L.layerGroup().addTo(map);
+      leafletMapInstanceRef.current = map;
     } else {
-      mapInstanceRef.current.setView([coords.latitude, coords.longitude], 12);
+      leafletMapInstanceRef.current.setView(defaultCenter, defaultZoom);
     }
-  };
 
-  // Location search input change with debounced suggestion fetch
-  const handleInputChange = (val) => {
-    setLocationSearchInput(val);
-    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
-    if (!val || val.trim().length < 2) {
-      setSuggestions([]);
-      setShowSuggestions(false);
+    const map = leafletMapInstanceRef.current;
+    const layer = leafletMarkersLayerRef.current;
+    if (!map || !layer) return;
+
+    layer.clearLayers();
+    leafletProviderMarkersRef.current = {};
+
+    // If user location is set, draw user pin and radius circle
+    if (userLocation) {
+      const userMarker = L.marker([userLocation.latitude, userLocation.longitude], { icon: leafletUserIcon })
+        .bindPopup(`
+          <div style="font-family: inherit; font-size: 0.85rem; padding: 4px; line-height: 1.4;">
+            <b style="color: #ef4444;">📍 Your Location</b><br/>
+            <span>${userLocation.name}</span><br/>
+            <span style="font-size: 0.75rem; color: #64748b;">GPS: ${userLocation.latitude.toFixed(4)}, ${userLocation.longitude.toFixed(4)}</span><br/>
+            <span style="font-size: 0.75rem; color: #2563eb; font-weight: 600;">Radius: ${radiusKm} km</span>
+          </div>
+        `);
+      layer.addLayer(userMarker);
+
+      const circle = L.circle([userLocation.latitude, userLocation.longitude], {
+        color: '#2563eb',
+        fillColor: '#3b82f6',
+        fillOpacity: 0.08,
+        weight: 1.5,
+        radius: radiusKm * 1000
+      });
+      layer.addLayer(circle);
+
+      // Draw provider markers
+      const bounds = L.latLngBounds([[userLocation.latitude, userLocation.longitude]]);
+
+      nearbyProviders.forEach((p) => {
+        if (p.latitude && p.longitude) {
+          bounds.extend([p.latitude, p.longitude]);
+
+          const popupContent = `
+            <div style="font-family: inherit; min-width: 220px; padding: 4px;">
+              <div style="font-weight: 700; font-size: 1rem; color: #0f172a; margin-bottom: 2px;">${p.provider_name}</div>
+              <div style="color: #2563eb; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">${p.service}</div>
+              <div style="display: flex; gap: 8px; font-size: 0.8rem; color: #475569; margin-bottom: 6px;">
+                <span>⭐ ${p.rating}</span>
+                <span>•</span>
+                <span style="font-weight: 600; color: #0f172a;">📍 ${p.distance} km away</span>
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.82rem; margin-bottom: 8px;">
+                <span style="color: #059669; font-weight: 600; background: #ecfdf5; padding: 2px 6px; border-radius: 4px;">${p.availability}</span>
+                <span style="font-weight: 700; color: #0f172a;">₹${p.price}</span>
+              </div>
+              <div style="display: flex; gap: 6px; margin-top: 8px; border-top: 1px solid #f1f5f9; padding-top: 6px;">
+                <a href="/providers/${p.provider_id}" style="flex: 1; text-align: center; background: #f8fafc; color: #0f172a; padding: 6px 8px; border-radius: 6px; font-size: 0.78rem; text-decoration: none; font-weight: 600; border: 1px solid #cbd5e1;">View Profile</a>
+                <button onclick="window.triggerMarketplaceBooking(${p.provider_id})" style="flex: 1; text-align: center; background: #2563eb; color: #ffffff; padding: 6px 8px; border-radius: 6px; font-size: 0.78rem; border: none; cursor: pointer; font-weight: 600;">Book Now</button>
+              </div>
+            </div>
+          `;
+
+          const marker = L.marker([p.latitude, p.longitude], { icon: leafletProviderIcon })
+            .bindPopup(popupContent);
+          layer.addLayer(marker);
+          leafletProviderMarkersRef.current[p.provider_id] = marker;
+        }
+      });
+
+      if (nearbyProviders.length > 0) {
+        map.fitBounds(bounds, { padding: [50, 50] });
+      }
+    }
+
+    // Trigger Leaflet resize calculation to guarantee full visible rendering
+    setTimeout(() => {
+      if (leafletMapInstanceRef.current) {
+        leafletMapInstanceRef.current.invalidateSize();
+      }
+    }, 150);
+  }, [userLocation, radiusKm, nearbyProviders]);
+
+  // 4. Render Google Map Engine
+  const renderGoogleMap = useCallback(() => {
+    if (!mapContainerRef.current || !window.google || !window.google.maps) return;
+
+    // Clean up Leaflet Map if present in DOM
+    if (leafletMapInstanceRef.current) {
+      leafletMapInstanceRef.current.remove();
+      leafletMapInstanceRef.current = null;
+    }
+
+    const google = window.google;
+    const defaultCenter = userLocation
+      ? { lat: userLocation.latitude, lng: userLocation.longitude }
+      : { lat: 20.5937, lng: 78.9629 };
+    const defaultZoom = userLocation ? 13 : 5;
+
+    if (!googleMapInstanceRef.current) {
+      mapContainerRef.current.innerHTML = '';
+      const map = new google.maps.Map(mapContainerRef.current, {
+        center: defaultCenter,
+        zoom: defaultZoom,
+        mapTypeControl: true,
+        streetViewControl: false,
+        fullscreenControl: true,
+        zoomControl: true,
+        mapTypeId: google.maps.MapTypeId.ROADMAP
+      });
+      googleMapInstanceRef.current = map;
+    } else {
+      googleMapInstanceRef.current.setCenter(defaultCenter);
+      googleMapInstanceRef.current.setZoom(defaultZoom);
+    }
+
+    const map = googleMapInstanceRef.current;
+
+    // Clear previous markers
+    if (googleUserMarkerRef.current) googleUserMarkerRef.current.setMap(null);
+    if (googleCircleRef.current) googleCircleRef.current.setMap(null);
+    googleMarkersRef.current.forEach(m => m.setMap(null));
+    googleMarkersRef.current = [];
+    googleInfoWindowsRef.current = {};
+
+    if (userLocation) {
+      const center = { lat: userLocation.latitude, lng: userLocation.longitude };
+
+      // User Marker
+      googleUserMarkerRef.current = new google.maps.Marker({
+        position: center,
+        map,
+        title: 'Selected Location: ' + userLocation.name,
+        zIndex: 999,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 9,
+          fillColor: '#ef4444',
+          fillOpacity: 1,
+          strokeColor: '#ffffff',
+          strokeWeight: 2.5
+        }
+      });
+
+      // Radius Circle
+      googleCircleRef.current = new google.maps.Circle({
+        strokeColor: '#2563eb',
+        strokeOpacity: 0.8,
+        strokeWeight: 1.5,
+        fillColor: '#3b82f6',
+        fillOpacity: 0.08,
+        map,
+        center,
+        radius: radiusKm * 1000
+      });
+
+      // Provider Markers
+      const bounds = new google.maps.LatLngBounds();
+      bounds.extend(center);
+
+      nearbyProviders.forEach((p) => {
+        if (p.latitude && p.longitude) {
+          const markerPos = { lat: p.latitude, lng: p.longitude };
+          bounds.extend(markerPos);
+
+          const marker = new google.maps.Marker({
+            position: markerPos,
+            map,
+            title: p.provider_name,
+            icon: {
+              url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png'
+            }
+          });
+
+          const infoWindowContent = `
+            <div style="font-family: inherit; min-width: 220px; padding: 4px;">
+              <div style="font-weight: 700; font-size: 1rem; color: #0f172a; margin-bottom: 2px;">${p.provider_name}</div>
+              <div style="color: #2563eb; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">${p.service}</div>
+              <div style="display: flex; gap: 8px; font-size: 0.8rem; color: #475569; margin-bottom: 6px;">
+                <span>⭐ ${p.rating}</span>
+                <span>•</span>
+                <span style="font-weight: 600; color: #0f172a;">📍 ${p.distance} km away</span>
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.82rem; margin-bottom: 8px;">
+                <span style="color: #059669; font-weight: 600; background: #ecfdf5; padding: 2px 6px; border-radius: 4px;">${p.availability}</span>
+                <span style="font-weight: 700; color: #0f172a;">₹${p.price}</span>
+              </div>
+              <div style="display: flex; gap: 6px; margin-top: 8px; border-top: 1px solid #f1f5f9; padding-top: 6px;">
+                <a href="/providers/${p.provider_id}" style="flex: 1; text-align: center; background: #f8fafc; color: #0f172a; padding: 6px 8px; border-radius: 6px; font-size: 0.78rem; text-decoration: none; font-weight: 600; border: 1px solid #cbd5e1;">View Profile</a>
+                <button onclick="window.triggerMarketplaceBooking(${p.provider_id})" style="flex: 1; text-align: center; background: #2563eb; color: #ffffff; padding: 6px 8px; border-radius: 6px; font-size: 0.78rem; border: none; cursor: pointer; font-weight: 600;">Book Now</button>
+              </div>
+            </div>
+          `;
+
+          const infoWindow = new google.maps.InfoWindow({ content: infoWindowContent });
+
+          marker.addListener('click', () => {
+            if (googleActiveInfoWindowRef.current) googleActiveInfoWindowRef.current.close();
+            infoWindow.open(map, marker);
+            googleActiveInfoWindowRef.current = infoWindow;
+          });
+
+          googleMarkersRef.current.push(marker);
+          googleInfoWindowsRef.current[p.provider_id] = { marker, infoWindow };
+        }
+      });
+
+      if (nearbyProviders.length > 0) {
+        map.fitBounds(bounds, { top: 50, right: 50, bottom: 50, left: 50 });
+      }
+    }
+
+    // Trigger Google Maps resize event to guarantee full visibility
+    setTimeout(() => {
+      if (googleMapInstanceRef.current) {
+        google.maps.event.trigger(googleMapInstanceRef.current, 'resize');
+      }
+    }, 150);
+  }, [userLocation, radiusKm, nearbyProviders]);
+
+  // Master Map Render Controller
+  useEffect(() => {
+    if (mapEngine === 'google' && googleMapsLoaded) {
+      renderGoogleMap();
+    } else {
+      renderLeafletMap();
+    }
+  }, [mapEngine, googleMapsLoaded, renderGoogleMap, renderLeafletMap]);
+
+  // 5. Browser Geolocation (HTML5 GPS - No key needed)
+  const handleUseCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setGeoError('Geolocation is not supported by your browser.');
       return;
     }
-    searchTimeoutRef.current = setTimeout(async () => {
-      try {
-        const res = await api.get('/maps/search-suggestions', { query: val.trim() });
-        setSuggestions(res || []);
-        setShowSuggestions(true);
-      } catch (err) {
-        console.error('Error fetching suggestions:', err);
-      }
-    }, 200);
+
+    setGeoLocating(true);
+    setGeoError(null);
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude } = pos.coords;
+        let placeName = `My Location (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`;
+
+        // Reverse geocode if available
+        if (window.google && window.google.maps && window.google.maps.Geocoder) {
+          try {
+            const geocoder = new window.google.maps.Geocoder();
+            const res = await geocoder.geocode({ location: { lat: latitude, lng: longitude } });
+            if (res.results && res.results[0]) {
+              placeName = res.results[0].formatted_address;
+            }
+          } catch (e) {
+            console.log('Reverse geocode note:', e);
+          }
+        }
+
+        const loc = { latitude, longitude, name: placeName };
+        setUserLocation(loc);
+        setLocationSearchInput(placeName);
+        setGeoLocating(false);
+      },
+      (err) => {
+        setGeoLocating(false);
+        let msg = 'Unable to retrieve location. Please check browser permissions or enter manually.';
+        if (err.code === 1) msg = 'Location permission denied. Please allow location access or type manually.';
+        else if (err.code === 2) msg = 'Location unavailable. Please enter a city or address manually.';
+        else if (err.code === 3) msg = 'Location request timed out. Please try again or type manually.';
+        setGeoError(msg);
+      },
+      { timeout: 10000, enableHighAccuracy: true }
+    );
   };
 
-  // User selects a suggestion from dropdown
-  const handleSelectSuggestion = (sugg) => {
-    setShowSuggestions(false);
-    setLocationSearchInput(sugg.display_name.split(',')[0]);
-    const newLocation = {
-      latitude: sugg.latitude,
-      longitude: sugg.longitude,
-      name: sugg.display_name,
-      isRealGps: false,
-      accuracy: null
-    };
-    setUserLocation(newLocation);
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.flyTo([sugg.latitude, sugg.longitude], 13, { duration: 1.5 });
-    }
-    setSyncSuccessMsg(`Opened location: ${sugg.display_name.split(',').slice(0, 2).join(',')}`);
-  };
-
-  // Location Search Handler: Search any city or address worldwide
-  const handleSearchLocation = async (e, customQuery = null) => {
+  // 6. Manual Location Search
+  const handleSearchLocation = async (e) => {
     if (e) e.preventDefault();
-    setShowSuggestions(false);
-    const queryToSearch = customQuery || locationSearchInput;
-    if (!queryToSearch || !queryToSearch.trim()) return;
+    const query = locationSearchInput.trim();
+    if (!query) return;
 
     setSearchingLocation(true);
     setGeoError(null);
-    setSyncSuccessMsg('');
 
     try {
-      const results = await api.get('/maps/geocode', { query: queryToSearch.trim() });
-      if (results && results.length > 0) {
-        const top = results[0];
-        const newLocation = {
-          latitude: top.latitude,
-          longitude: top.longitude,
-          name: top.display_name,
-          isRealGps: false,
-          accuracy: null
-        };
-        setUserLocation(newLocation);
-        setLocationSearchInput(top.display_name.split(',')[0]);
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.flyTo([top.latitude, top.longitude], 13, { duration: 1.5 });
+      let lat = null;
+      let lng = null;
+      let formattedName = query;
+
+      // Primary: Google Geocoder if ready
+      if (window.google && window.google.maps && window.google.maps.Geocoder) {
+        try {
+          const geocoder = new window.google.maps.Geocoder();
+          const response = await geocoder.geocode({ address: query });
+          if (response.results && response.results.length > 0) {
+            const loc = response.results[0].geometry.location;
+            lat = loc.lat();
+            lng = loc.lng();
+            formattedName = response.results[0].formatted_address;
+          }
+        } catch (gErr) {
+          console.warn('Google Geocoder note:', gErr);
         }
-        setSyncSuccessMsg(`Opened location: ${top.display_name.split(',').slice(0, 2).join(',')}`);
+      }
+
+      // Fallback: Backend geocoding API
+      if (lat === null || lng === null) {
+        const results = await api.get('/maps/geocode', { query });
+        if (results && results.length > 0) {
+          lat = results[0].latitude;
+          lng = results[0].longitude;
+          formattedName = results[0].display_name;
+        }
+      }
+
+      if (lat !== null && lng !== null) {
+        const loc = { latitude: lat, longitude: lng, name: formattedName };
+        setUserLocation(loc);
+        setLocationSearchInput(formattedName);
       } else {
-        setGeoError(`Location "${queryToSearch}" not found. Try searching another city or neighborhood.`);
+        setGeoError(`Could not find coordinates for "${query}". Please check the spelling or try another location.`);
       }
     } catch (err) {
-      console.error('Error searching location:', err);
-      setGeoError('Failed to geocode location. Please try again.');
+      console.error('Location search error:', err);
+      setGeoError('Failed to search location. Please check your connection and try again.');
     } finally {
       setSearchingLocation(false);
     }
   };
 
-  // Browser Geolocation API Handler: "Use my current location"
-  const handleUseCurrentLocation = () => {
-    setGeoError(null);
-    setSyncSuccessMsg('');
-
-    if (!navigator.geolocation) {
-      setGeoError('Geolocation API is not supported by your browser.');
-      return;
-    }
-
-    setGeoLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords;
-        const newLocation = {
-          latitude,
-          longitude,
-          name: 'My Current GPS Location',
-          isRealGps: true,
-          accuracy: Math.round(accuracy)
-        };
-
-        setUserLocation(newLocation);
-        setLocationSearchInput('Current GPS Location');
-        setGeoLocating(false);
-
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.flyTo([latitude, longitude], 13, { duration: 1.5 });
-        }
-        setSyncSuccessMsg(`GPS Location locked: ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
-      },
-      (error) => {
-        console.warn('Geolocation error:', error);
-        let errorMsg = 'Could not retrieve your physical location.';
-        if (error.code === 1) {
-          errorMsg = 'Location permission was denied. Please allow location permissions in your browser or search a location above.';
-        } else if (error.code === 2) {
-          errorMsg = 'Location position is currently unavailable from your device.';
-        } else if (error.code === 3) {
-          errorMsg = 'Location request timed out. Please try again.';
-        }
-        setGeoError(errorMsg);
-        setGeoLocating(false);
-      },
-      { timeout: 10000, enableHighAccuracy: true, maximumAge: 0 }
-    );
-  };
-
-  // Focus provider on map from list
-  const handleFocusProvider = (p) => {
-    if (!mapInstanceRef.current || !p.latitude || !p.longitude) return;
-    mapInstanceRef.current.flyTo([p.latitude, p.longitude], 14, { duration: 1 });
-    const marker = providerMarkersRef.current[p.provider_id];
-    if (marker) {
-      setTimeout(() => marker.openPopup(), 400);
+  // Card click pan handler
+  const handleSelectProviderCard = (provider) => {
+    if (mapEngine === 'google' && googleMapInstanceRef.current) {
+      const entry = googleInfoWindowsRef.current[provider.provider_id];
+      if (entry) {
+        googleMapInstanceRef.current.panTo(entry.marker.getPosition());
+        googleMapInstanceRef.current.setZoom(14);
+        if (googleActiveInfoWindowRef.current) googleActiveInfoWindowRef.current.close();
+        entry.infoWindow.open(googleMapInstanceRef.current, entry.marker);
+        googleActiveInfoWindowRef.current = entry.infoWindow;
+      }
+    } else if (leafletMapInstanceRef.current) {
+      const marker = leafletProviderMarkersRef.current[provider.provider_id];
+      if (marker) {
+        leafletMapInstanceRef.current.setView([provider.latitude, provider.longitude], 14);
+        marker.openPopup();
+      }
     }
   };
 
-  // Relocate demo providers around the user's real GPS coordinates if requested
-  const handleSyncDemoProviders = async () => {
-    setSyncingDemo(true);
-    setSyncSuccessMsg('');
-    try {
-      const res = await api.post('/maps/sync-demo-providers', null, {
-        latitude: userLocation.latitude,
-        longitude: userLocation.longitude,
-        area_name: userLocation.name,
-      });
-      setSyncSuccessMsg(`Placed verified providers around ${userLocation.name.split(',')[0]}!`);
-      await fetchNearbyProviders(userLocation);
-    } catch (err) {
-      console.error('Error syncing demo providers:', err);
-      alert('Could not sync demo providers: ' + err.message);
-    } finally {
-      setSyncingDemo(false);
-    }
-  };
-
-  // Booking Submission Handler
-  const handleConfirmBooking = async (e) => {
+  // Booking submit handler
+  const handleBookingSubmit = async (e) => {
     e.preventDefault();
     if (!bookingProvider) return;
 
     setBookingSubmitting(true);
     setBookingError('');
-    try {
-      await api.post('/bookings', {
-        provider_id: bookingProvider.provider_id,
-        service_id: bookingProvider.service_id || (services[0]?.id || 1),
-        booking_date: bookingDate,
-        booking_time: bookingTime,
-        service_address: serviceAddress,
-        special_instructions: specialInstructions,
-      });
 
+    try {
+      const payload = {
+        provider_id: bookingProvider.provider_id,
+        provider_service_id: bookingProvider.provider_service_id || undefined,
+        service_id: bookingProvider.service_id,
+        booking_date: `${bookingDate}T${bookingTime}:00`,
+        address: serviceAddress || (userLocation ? userLocation.name : 'Client Address'),
+        special_instructions: specialInstructions,
+        notes: specialInstructions,
+        estimated_price: bookingProvider.price,
+      };
+
+      await api.post('/bookings', payload);
       setBookingSuccess(true);
-      setTimeout(() => {
-        setBookingProvider(null);
-        navigate('/bookings');
-      }, 1500);
     } catch (err) {
-      setBookingError(err.message || 'Failed to submit appointment');
+      console.error('Booking failed:', err);
+      setBookingError(err.message || 'Failed to complete booking. Please try again.');
     } finally {
       setBookingSubmitting(false);
     }
   };
 
   return (
-    <div className="container" style={{ padding: '2rem 1.5rem 4rem' }}>
-      {/* Title & Architecture Flow */}
-      <div style={{ marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
-          <div className="badge badge-primary" style={{ padding: '0.25rem 0.65rem' }}>
-            <Compass size={13} />
-            <span>GIS Haversine Spatial Engine</span>
+    <div className="maps-page-container">
+      {/* Top Controls Header */}
+      <div className="maps-header-bar">
+        <div className="maps-header-title">
+          <div className="icon-wrapper">
+            <Compass className="w-5 h-5 text-blue-600" />
           </div>
-          {userLocation.isRealGps && (
-            <div className="badge badge-accent" style={{ padding: '0.25rem 0.65rem' }}>
-              <Navigation size={13} />
-              <span>Real Browser GPS Active</span>
-            </div>
-          )}
+          <div>
+            <h1 className="text-xl font-bold text-slate-900">Interactive Service Map</h1>
+            <p className="text-xs text-slate-500">Live PostgreSQL-backed providers via Real Interactive Maps</p>
+          </div>
         </div>
-        <h1 style={{ fontSize: '2rem', marginBottom: '0.4rem' }}>Spatial Provider Discovery</h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
-          Search any city, area, or address worldwide, or use your physical GPS location to discover nearby verified service specialists on OpenStreetMap.
-        </p>
-      </div>
 
-      {/* Geolocation feedback alerts */}
-      {geoError && (
-        <div style={{
-          background: 'var(--danger-light)',
-          color: 'var(--danger)',
-          border: '1px solid #fecaca',
-          borderRadius: 'var(--radius-md)',
-          padding: '0.75rem 1rem',
-          marginBottom: '1rem',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          fontSize: '0.875rem'
-        }}>
-          <AlertCircle size={16} />
-          <span>{geoError}</span>
-        </div>
-      )}
-
-      {syncSuccessMsg && (
-        <div style={{
-          background: 'var(--accent-light)',
-          color: '#065f46',
-          border: '1px solid #a7f3d0',
-          borderRadius: 'var(--radius-md)',
-          padding: '0.75rem 1rem',
-          marginBottom: '1rem',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          fontSize: '0.875rem'
-        }}>
-          <CheckCircle size={16} />
-          <span>{syncSuccessMsg}</span>
-        </div>
-      )}
-
-      {/* Control Bar: Location Search + Current GPS, Service Filter, Radius */}
-      <div className="card" style={{
-        padding: '1.25rem 1.5rem',
-        marginBottom: '1.25rem',
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-        gap: '1.25rem',
-        alignItems: 'end'
-      }}>
-        {/* 1. Location Search Input + "Use my current location" Button */}
-        <div>
-          <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem', color: 'var(--text-muted)' }}>
-            Search Location / Use GPS
-          </label>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <form onSubmit={handleSearchLocation} style={{ display: 'flex', gap: '0.35rem', flex: 1.5, position: 'relative' }}>
-              <div style={{ position: 'relative', flex: 1 }}>
-                <Search size={15} color="var(--primary)" style={{ position: 'absolute', left: '0.7rem', top: '50%', transform: 'translateY(-50%)' }} />
-                <input
-                  type="text"
-                  placeholder="Search city, area, address..."
-                  value={locationSearchInput}
-                  onChange={(e) => handleInputChange(e.target.value)}
-                  onFocus={() => { if (suggestions.length > 0) setShowSuggestions(true); }}
-                  style={{ paddingLeft: '2.1rem', width: '100%', height: '38px', fontSize: '0.85rem' }}
-                />
-
-                {/* Instant suggestions dropdown */}
-                {showSuggestions && suggestions.length > 0 && (
-                  <div style={{
-                    position: 'absolute',
-                    top: '100%',
-                    left: 0,
-                    right: 0,
-                    background: '#ffffff',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius-md)',
-                    boxShadow: 'var(--shadow-lg)',
-                    zIndex: 9999,
-                    marginTop: '4px',
-                    maxHeight: '220px',
-                    overflowY: 'auto'
-                  }}>
-                    {suggestions.map((sugg, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => handleSelectSuggestion(sugg)}
-                        style={{
-                          padding: '0.6rem 0.85rem',
-                          fontSize: '0.85rem',
-                          cursor: 'pointer',
-                          borderBottom: '1px solid #f1f5f9',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem',
-                          color: 'var(--text-main)'
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = '#eff6ff'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = '#ffffff'}
-                      >
-                        <MapPin size={14} color="#ef4444" style={{ flexShrink: 0 }} />
-                        <span style={{ fontWeight: 500 }}>{sugg.display_name}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+        {/* Location Search Form (Requirements 4 & 5: Initially Empty) */}
+        <form onSubmit={handleSearchLocation} className="location-search-form">
+          <div className="search-input-wrapper">
+            <MapPin className="search-input-icon text-slate-400" />
+            <input
+              type="text"
+              className="location-input"
+              placeholder="Enter city, area, address, or postal code..."
+              value={locationSearchInput}
+              onChange={(e) => setLocationSearchInput(e.target.value)}
+            />
+            {locationSearchInput && (
               <button
-                type="submit"
-                disabled={searchingLocation}
-                className="btn btn-secondary btn-sm"
-                style={{ height: '38px', padding: '0 0.85rem', whiteSpace: 'nowrap' }}
+                type="button"
+                onClick={() => setLocationSearchInput('')}
+                className="clear-input-btn"
+                title="Clear input"
               >
-                {searchingLocation ? 'Searching...' : 'Search'}
+                <X className="w-3.5 h-3.5 text-slate-400 hover:text-slate-600" />
               </button>
-            </form>
-
-            <button
-              onClick={handleUseCurrentLocation}
-              disabled={geoLocating}
-              className="btn btn-primary btn-sm"
-              style={{ height: '38px', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-              title="Detect physical position via Browser Geolocation API"
-            >
-              <Navigation size={13} className={geoLocating ? 'spin' : ''} />
-              <span>{geoLocating ? 'Locating...' : 'My Location'}</span>
-            </button>
+            )}
           </div>
-        </div>
 
-        {/* 2. Service Category Filter */}
-        <div>
-          <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem', color: 'var(--text-muted)' }}>
-            Filter by Service
-          </label>
-          <select
-            value={selectedServiceId}
-            onChange={(e) => setSelectedServiceId(e.target.value)}
-            style={{ height: '38px' }}
+          <button
+            type="submit"
+            disabled={searchingLocation || !locationSearchInput.trim()}
+            className="search-btn"
           >
-            <option value="">All Service Specializations</option>
-            {services.map((s) => (
-              <option key={s.id} value={s.id}>{s.name} ({s.category_name})</option>
-            ))}
-          </select>
-        </div>
+            {searchingLocation ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <Search className="w-4 h-4" />
+            )}
+            <span>Search</span>
+          </button>
 
-        {/* 3. Haversine Radius Slider */}
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem', color: 'var(--text-muted)' }}>
-            <span>Search Radius (Haversine)</span>
-            <span style={{ color: 'var(--primary)', fontWeight: 700 }}>{radiusKm} km</span>
-          </div>
-          <input
-            type="range"
-            min="2"
-            max="40"
-            step="1"
-            value={radiusKm}
-            onChange={(e) => setRadiusKm(Number(e.target.value))}
-            style={{ width: '100%', cursor: 'pointer', height: '38px' }}
-          />
-        </div>
+          <button
+            type="button"
+            onClick={handleUseCurrentLocation}
+            disabled={geoLocating}
+            className="gps-btn"
+            title="Use browser Geolocation (HTML5 GPS - No Key Needed)"
+          >
+            {geoLocating ? (
+              <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
+            ) : (
+              <Navigation className="w-4 h-4 text-blue-600" />
+            )}
+            <span>Use My Location</span>
+          </button>
+        </form>
       </div>
 
-      {/* Popular City Quick-Search Chips */}
-      <div style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: '0.4rem',
-        alignItems: 'center',
-        marginBottom: '1rem',
-        padding: '0 0.25rem'
-      }}>
-        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>Quick Search:</span>
-        {['Mumbai', 'Delhi', 'Hyderabad', 'Chennai', 'Bengaluru', 'Pune', 'Kolkata', 'Jaipur', 'Ahmedabad', 'London', 'New York'].map((c) => (
+      {/* Geolocation Notice Banner */}
+      {geoError && (
+        <div className="maps-alert-banner warning">
+          <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+          <span className="text-sm text-amber-800">{geoError}</span>
+          <button onClick={() => setGeoError(null)} className="ml-auto text-amber-600 hover:text-amber-800">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Google Maps Notice Banner (with easy switch/retry) */}
+      {googleMapsError && (
+        <div className="maps-alert-banner info">
+          <AlertCircle className="w-4 h-4 text-blue-600 flex-shrink-0" />
+          <div className="flex-1 text-xs text-blue-900">
+            <span className="font-semibold">Map Notice: </span>
+            {googleMapsError}
+          </div>
           <button
-            key={c}
             onClick={() => {
-              setLocationSearchInput(c);
-              handleSearchLocation(null, c);
+              setMapEngine('google');
+              setGoogleMapsError(null);
             }}
-            style={{
-              background: '#ffffff',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-full)',
-              padding: '0.2rem 0.65rem',
-              fontSize: '0.75rem',
-              color: 'var(--text-muted)',
-              cursor: 'pointer',
-              transition: 'all 0.15s ease'
-            }}
+            className="px-2 py-0.5 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded text-xs font-semibold"
           >
-            📍 {c}
-          </button>
-        ))}
-      </div>
-
-      {/* Current GPS Coordinates Badge */}
-      <div style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        background: '#ffffff',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-md)',
-        padding: '0.65rem 1rem',
-        marginBottom: '1.25rem',
-        fontSize: '0.85rem',
-        color: 'var(--text-muted)'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <MapPin size={16} color="#ef4444" />
-          <span>
-            Current Map Center: <strong style={{ color: 'var(--text-main)' }}>{userLocation.name.split(',').slice(0, 3).join(',')}</strong> (Lat: <code>{userLocation.latitude.toFixed(4)}</code>, Lon: <code>{userLocation.longitude.toFixed(4)}</code>
-            {userLocation.accuracy ? ` • Accuracy: ±${userLocation.accuracy}m` : ''})
-          </span>
-        </div>
-
-        {/* Sync helper button */}
-        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
-          <button
-            onClick={handleSyncDemoProviders}
-            disabled={syncingDemo}
-            className="btn btn-secondary btn-sm"
-            style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}
-            title="Place demo providers at your current GPS/searched location"
-          >
-            <RefreshCw size={12} className={syncingDemo ? 'spin' : ''} />
-            <span>Place Providers Around Here</span>
+            Retry Google Maps
           </button>
         </div>
-      </div>
+      )}
 
-      {/* Main Grid: Leaflet Map (Left) + Providers List (Right) */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1.6fr) minmax(320px, 1fr)',
-        gap: '1.5rem',
-        alignItems: 'start'
-      }}>
-        {/* Leaflet Map Box */}
-        <div>
-          <div
-            ref={mapContainerRef}
-            style={{
-              height: '580px',
-              borderRadius: 'var(--radius-lg)',
-              border: '1px solid var(--border)',
-              boxShadow: 'var(--shadow-md)',
-              position: 'relative',
-              zIndex: 1,
-            }}
-          />
+      {/* Main Grid: Sidebar + Canvas */}
+      <div className="maps-main-grid">
+        {/* Left Sidebar: Filters & Provider Cards */}
+        <div className="maps-sidebar-panel">
+          <div className="filter-controls-box">
+            <div className="filter-row">
+              <label className="filter-label">Filter Service</label>
+              <select
+                className="filter-select"
+                value={selectedServiceId}
+                onChange={(e) => setSelectedServiceId(e.target.value)}
+              >
+                <option value="">All Approved Services</option>
+                {services.map((svc) => (
+                  <option key={svc.id} value={svc.id}>
+                    {svc.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          {/* Map Legend */}
-          <div style={{
-            marginTop: '0.75rem',
-            fontSize: '0.8rem',
-            color: 'var(--text-muted)',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: '1.5rem',
-            alignItems: 'center'
-          }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ef4444', display: 'inline-block' }}></span>
-              <strong>Red Marker:</strong> Selected Location / GPS Center
-            </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#2563eb', display: 'inline-block' }}></span>
-              <strong>Blue Marker:</strong> Verified Service Provider
-            </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#93c5fd', border: '1px solid #2563eb', display: 'inline-block' }}></span>
-              <strong>Blue Circle:</strong> {radiusKm} km Haversine Radius
-            </span>
-          </div>
-        </div>
+            <div className="filter-row">
+              <div className="flex justify-between items-center mb-1">
+                <label className="filter-label">Search Radius</label>
+                <span className="text-xs font-bold text-blue-600">{radiusKm} km</span>
+              </div>
+              <input
+                type="range"
+                min="3"
+                max="50"
+                step="1"
+                value={radiusKm}
+                onChange={(e) => setRadiusKm(Number(e.target.value))}
+                className="radius-range-slider"
+              />
+            </div>
 
-        {/* Nearby Provider Cards */}
-        <div style={{ maxHeight: '620px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem', paddingRight: '0.25rem' }}>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            position: 'sticky',
-            top: 0,
-            background: 'var(--bg-main)',
-            paddingBottom: '0.5rem',
-            zIndex: 5,
-            borderBottom: '1px solid var(--border)'
-          }}>
-            <h3 style={{ fontSize: '1.1rem' }}>
-              Nearby Providers ({nearbyProviders.length})
-            </h3>
-            {loading && <span style={{ fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 600 }}>Calculating...</span>}
+            {userLocation && (
+              <div className="location-active-badge">
+                <MapPin className="w-3.5 h-3.5 text-blue-600 flex-shrink-0" />
+                <span className="truncate text-xs text-slate-700 font-medium">
+                  {userLocation.name}
+                </span>
+              </div>
+            )}
           </div>
 
-          {nearbyProviders.length === 0 ? (
-            <div className="card" style={{ textAlign: 'center', padding: '2rem 1.5rem' }}>
-              <MapPin size={36} color="var(--text-muted)" style={{ margin: '0 auto 0.75rem' }} />
-              <h4 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>No Providers in this Radius</h4>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1.25rem' }}>
-                No active service providers found within {radiusKm} km of {userLocation.name.split(',')[0]}.
-              </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <div className="providers-list-header">
+            <span className="font-semibold text-xs text-slate-600 uppercase tracking-wider">
+              {loadingProviders ? 'Searching...' : `${nearbyProviders.length} Nearby Provider${nearbyProviders.length === 1 ? '' : 's'}`}
+            </span>
+            {userLocation && (
+              <span className="text-xs text-slate-500 font-medium">
+                Within {radiusKm} km
+              </span>
+            )}
+          </div>
+
+          <div className="providers-scroll-list">
+            {!userLocation ? (
+              <div className="empty-state-notice">
+                <Compass className="w-10 h-10 text-blue-500 mx-auto mb-2" />
+                <h3 className="font-semibold text-slate-800 text-sm mb-1">Interactive Map Ready</h3>
+                <p className="text-xs text-slate-500 max-w-xs mx-auto mb-3">
+                  Please enter a city or address in the search box, or click <strong>Use My Location</strong> to find nearby verified providers.
+                </p>
+                <button
+                  onClick={handleUseCurrentLocation}
+                  disabled={geoLocating}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition"
+                >
+                  <Navigation className="w-3.5 h-3.5" />
+                  <span>Use My Location</span>
+                </button>
+              </div>
+            ) : loadingProviders ? (
+              <div className="loading-state-notice">
+                <RefreshCw className="w-6 h-6 animate-spin text-blue-600 mx-auto mb-2" />
+                <p className="text-xs text-slate-500">Calculating Haversine distance to approved providers...</p>
+              </div>
+            ) : nearbyProviders.length === 0 ? (
+              <div className="empty-state-notice">
+                <MapPin className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                <h3 className="font-semibold text-slate-800 text-sm mb-1">No Providers in this Radius</h3>
+                <p className="text-xs text-slate-500 max-w-xs mx-auto mb-3">
+                  No approved providers found within {radiusKm} km. Try increasing the search radius or selecting another service.
+                </p>
                 <button
                   onClick={() => setRadiusKm(35)}
-                  className="btn btn-secondary btn-sm"
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
                 >
-                  Expand Search Radius to 35 km
-                </button>
-                <button
-                  onClick={handleSyncDemoProviders}
-                  disabled={syncingDemo}
-                  className="btn btn-primary btn-sm"
-                >
-                  Place Providers Around Here
+                  Expand Radius to 35 km
                 </button>
               </div>
-            </div>
-          ) : (
-            nearbyProviders.map((p) => (
-              <div
-                key={p.provider_id}
-                className="card"
-                style={{
-                  padding: '1.15rem',
-                  border: '1px solid var(--border)',
-                  transition: 'all 0.2s ease',
-                  cursor: 'pointer'
-                }}
-                onClick={() => handleFocusProvider(p)}
+            ) : (
+              nearbyProviders.map((p) => (
+                <div
+                  key={p.provider_id}
+                  onClick={() => handleSelectProviderCard(p)}
+                  className="provider-map-card"
+                >
+                  <div className="flex justify-between items-start mb-1.5">
+                    <div>
+                      <h4 className="font-bold text-sm text-slate-900 leading-snug">{p.provider_name}</h4>
+                      <p className="text-xs font-semibold text-blue-600">{p.service}</p>
+                    </div>
+                    <span className="rating-badge">
+                      <Star className="w-3 h-3 text-amber-500 fill-amber-500" />
+                      <span>{p.rating}</span>
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs text-slate-500 mb-2">
+                    <span className="inline-flex items-center gap-1 font-semibold text-slate-700">
+                      <MapPin className="w-3 h-3 text-red-500" />
+                      {p.distance} km away
+                    </span>
+                    <span className="font-bold text-slate-900 text-xs">
+                      Starts ₹{p.price}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                    <span className="text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded">
+                      {p.availability}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        to={`/providers/${p.provider_id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-slate-600 hover:text-slate-900 font-semibold text-xs"
+                      >
+                        Profile
+                      </Link>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setBookingProvider(p);
+                          setBookingSuccess(false);
+                          setBookingError('');
+                          setServiceAddress(userLocation ? userLocation.name : '');
+                        }}
+                        className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold transition"
+                      >
+                        Book Now
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Right Map Canvas Wrapper */}
+        <div className="maps-canvas-wrapper">
+          {/* Top-Right Map Engine Switcher Badge */}
+          <div className="map-engine-badge-bar">
+            <div className="engine-toggle-group">
+              <button
+                type="button"
+                onClick={() => setMapEngine('google')}
+                className={`engine-toggle-btn ${mapEngine === 'google' ? 'active' : ''}`}
+                title="Use Google Maps Engine"
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.4rem' }}>
-                  <div>
-                    <h4 style={{ fontSize: '1rem', marginBottom: '0.15rem' }}>{p.provider_name}</h4>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 600 }}>{p.service}</span>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontWeight: 800, color: 'var(--secondary)' }}>₹{p.price}</div>
-                    <div style={{ fontSize: '0.75rem', color: '#059669', fontWeight: 600 }}>{p.availability}</div>
-                  </div>
-                </div>
+                <span>Google Maps</span>
+                {mapEngine === 'google' && <Check className="w-3 h-3 ml-1" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMapEngine('leaflet')}
+                className={`engine-toggle-btn ${mapEngine === 'leaflet' ? 'active' : ''}`}
+                title="Use OpenStreetMap Engine"
+              >
+                <span>OpenStreetMap</span>
+                {mapEngine === 'leaflet' && <Check className="w-3 h-3 ml-1" />}
+              </button>
+            </div>
+          </div>
 
-                <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.85rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', color: '#b45309', fontWeight: 600 }}>
-                    <Star size={13} fill="#f59e0b" color="#f59e0b" />
-                    <span>{p.rating}</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', color: 'var(--text-main)', fontWeight: 600 }}>
-                    <MapPin size={13} color="var(--primary)" />
-                    <span>{p.distance} km away</span>
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    {p.address}
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', gap: '0.5rem' }} onClick={(e) => e.stopPropagation()}>
-                  <Link
-                    to={`/providers/${p.provider_id}`}
-                    className="btn btn-secondary btn-sm"
-                    style={{ flex: 1, textAlign: 'center' }}
-                  >
-                    View Profile
-                  </Link>
-                  <button
-                    onClick={() => {
-                      setBookingProvider(p);
-                      setBookingSuccess(false);
-                      setBookingError('');
-                      setServiceAddress(`Apartment 4B, ${userLocation.name.split(',')[0]}`);
-                    }}
-                    className="btn btn-primary btn-sm"
-                    style={{ flex: 1 }}
-                  >
-                    Book Now
-                  </button>
-                </div>
+          {/* Floating Empty Location Notification Overlay */}
+          {!userLocation && (
+            <div className="map-location-prompt-card">
+              <div className="flex items-center gap-2 mb-1">
+                <MapPin className="w-4 h-4 text-blue-600" />
+                <span className="font-bold text-slate-900 text-xs">Ready to Search</span>
               </div>
-            ))
+              <p className="text-xs text-slate-600 mb-2 leading-tight">
+                Enter your city in the top bar or use your current location to view nearby providers on the map.
+              </p>
+              <button
+                onClick={handleUseCurrentLocation}
+                disabled={geoLocating}
+                className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition"
+              >
+                <Navigation className="w-3.5 h-3.5" />
+                <span>Use Current Location</span>
+              </button>
+            </div>
           )}
+
+          {/* The actual Map Container DOM element */}
+          <div
+            ref={mapContainerRef}
+            className="map-viewport-element"
+            style={{ width: '100%', height: '100%' }}
+          />
         </div>
       </div>
 
-      {/* In-Page Booking Modal */}
+      {/* In-page Booking Modal */}
       {bookingProvider && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(15, 23, 42, 0.6)',
-          backdropFilter: 'blur(4px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 9999,
-          padding: '1rem'
-        }}>
-          <div className="card" style={{ maxWidth: '520px', width: '100%', padding: '2rem', maxHeight: '90vh', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
-              <div>
-                <h3 style={{ fontSize: '1.25rem', marginBottom: '0.25rem' }}>Schedule Appointment</h3>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  Booking verified professional matching your selected location
-                </p>
+        <div className="modal-backdrop">
+          <div className="modal-card">
+            <div className="modal-header">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
+                  <Calendar className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900">Book {bookingProvider.service}</h3>
+                  <p className="text-xs text-slate-500">Provider: {bookingProvider.provider_name}</p>
+                </div>
               </div>
               <button
                 onClick={() => setBookingProvider(null)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                className="text-slate-400 hover:text-slate-600 p-1"
               >
-                <X size={20} />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Provider Mini Summary */}
-            <div style={{
-              background: 'var(--primary-light)',
-              borderRadius: 'var(--radius-md)',
-              padding: '1rem',
-              marginBottom: '1.25rem',
-              border: '1px solid var(--primary-glow)'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h4 style={{ fontSize: '1rem' }}>{bookingProvider.provider_name}</h4>
-                  <span style={{ fontSize: '0.85rem', color: 'var(--primary)', fontWeight: 600 }}>{bookingProvider.service}</span>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--primary)' }}>₹{bookingProvider.price}</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>📍 {bookingProvider.distance} km away</div>
-                </div>
-              </div>
-            </div>
-
             {bookingSuccess ? (
-              <div style={{ textAlign: 'center', padding: '2rem 1rem' }}>
-                <CheckCircle size={48} color="var(--accent)" style={{ margin: '0 auto 1rem' }} />
-                <h4 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: 'var(--accent)' }}>Appointment Confirmed!</h4>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                  Your booking request has been sent to {bookingProvider.provider_name}. Redirecting to your bookings dashboard...
+              <div className="p-6 text-center">
+                <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <CheckCircle className="w-6 h-6" />
+                </div>
+                <h4 className="text-lg font-bold text-slate-900 mb-1">Booking Confirmed!</h4>
+                <p className="text-xs text-slate-600 mb-4">
+                  Your appointment request has been scheduled with <strong>{bookingProvider.provider_name}</strong>. An email notification has been dispatched to your registered address.
                 </p>
+                <div className="flex gap-2 justify-center">
+                  <button
+                    onClick={() => {
+                      setBookingProvider(null);
+                      navigate('/bookings');
+                    }}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold"
+                  >
+                    View in My Bookings
+                  </button>
+                  <button
+                    onClick={() => setBookingProvider(null)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             ) : (
-              <form onSubmit={handleConfirmBooking} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <form onSubmit={handleBookingSubmit} className="p-5 space-y-4">
                 {bookingError && (
-                  <div style={{
-                    background: 'var(--danger-light)',
-                    color: 'var(--danger)',
-                    padding: '0.75rem',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '0.85rem'
-                  }}>
+                  <div className="p-3 bg-red-50 text-red-700 rounded-lg text-xs font-medium border border-red-200">
                     {bookingError}
                   </div>
                 )}
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
-                      Date
-                    </label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Service Date</label>
                     <input
                       type="date"
-                      value={bookingDate}
-                      min={new Date().toISOString().split('T')[0]}
-                      onChange={(e) => setBookingDate(e.target.value)}
                       required
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      value={bookingDate}
+                      onChange={(e) => setBookingDate(e.target.value)}
                     />
                   </div>
-
                   <div>
-                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
-                      Time Slot
-                    </label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Preferred Time</label>
                     <select
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
                       value={bookingTime}
                       onChange={(e) => setBookingTime(e.target.value)}
-                      required
                     >
                       <option value="09:00">09:00 AM</option>
-                      <option value="11:00">11:00 AM</option>
+                      <option value="10:00">10:00 AM</option>
+                      <option value="11:30">11:30 AM</option>
                       <option value="14:00">02:00 PM</option>
-                      <option value="16:00">04:00 PM</option>
-                      <option value="18:00">06:00 PM</option>
+                      <option value="15:30">03:30 PM</option>
+                      <option value="17:00">05:00 PM</option>
                     </select>
                   </div>
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
-                    Doorstep Service Address
-                  </label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Service Address</label>
                   <input
                     type="text"
+                    required
+                    placeholder="Enter your complete street address..."
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     value={serviceAddress}
                     onChange={(e) => setServiceAddress(e.target.value)}
-                    required
                   />
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
-                    Special Instructions / Symptoms
-                  </label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Instructions for Provider</label>
                   <textarea
                     rows={2}
+                    placeholder="Describe specific issues, gate codes, or landmarks..."
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     value={specialInstructions}
                     onChange={(e) => setSpecialInstructions(e.target.value)}
-                    placeholder="e.g. Bring spare compressor capacitor, gate code #1234"
                   />
                 </div>
 
-                <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-                  <button
-                    type="button"
-                    onClick={() => setBookingProvider(null)}
-                    className="btn btn-secondary"
-                    style={{ flex: 1 }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={bookingSubmitting}
-                    className="btn btn-primary"
-                    style={{ flex: 1 }}
-                  >
-                    {bookingSubmitting ? 'Confirming...' : 'Confirm Appointment'}
-                  </button>
+                <div className="pt-2 border-t border-slate-200 flex items-center justify-between">
+                  <div>
+                    <span className="text-xs text-slate-500">Estimated Total:</span>
+                    <span className="block font-bold text-slate-900 text-base">₹{bookingProvider.price}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setBookingProvider(null)}
+                      className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={bookingSubmitting}
+                      className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition disabled:opacity-50"
+                    >
+                      {bookingSubmitting ? 'Confirming...' : 'Confirm Appointment'}
+                    </button>
+                  </div>
                 </div>
               </form>
             )}
           </div>
         </div>
       )}
+
+      {/* Scoped Page Styles */}
+      <style>{`
+        .maps-page-container {
+          display: flex;
+          flex-direction: column;
+          height: 100%;
+          min-height: calc(100vh - 70px);
+          overflow: hidden;
+          background: #f8fafc;
+        }
+        .maps-header-bar {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 12px 20px;
+          background: #ffffff;
+          border-bottom: 1px solid #e2e8f0;
+          z-index: 10;
+        }
+        .maps-header-title {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .icon-wrapper {
+          width: 36px;
+          height: 36px;
+          background: #eff6ff;
+          border-radius: 10px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .location-search-form {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex: 1;
+          max-width: 640px;
+        }
+        .search-input-wrapper {
+          position: relative;
+          flex: 1;
+        }
+        .search-input-icon {
+          position: absolute;
+          left: 12px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 16px;
+          height: 16px;
+        }
+        .location-input {
+          width: 100%;
+          padding: 8px 32px 8px 36px;
+          font-size: 0.85rem;
+          border: 1px solid #cbd5e1;
+          border-radius: 10px;
+          outline: none;
+          background: #f8fafc;
+          transition: all 0.2s;
+        }
+        .location-input:focus {
+          border-color: #2563eb;
+          background: #ffffff;
+          box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+        }
+        .clear-input-btn {
+          position: absolute;
+          right: 10px;
+          top: 50%;
+          transform: translateY(-50%);
+          background: none;
+          border: none;
+          cursor: pointer;
+        }
+        .search-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 8px 14px;
+          background: #2563eb;
+          color: #ffffff;
+          font-size: 0.82rem;
+          font-weight: 600;
+          border-radius: 10px;
+          border: none;
+          cursor: pointer;
+          transition: background 0.15s;
+        }
+        .search-btn:hover:not(:disabled) {
+          background: #1d4ed8;
+        }
+        .search-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+        .gps-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 8px 14px;
+          background: #eff6ff;
+          color: #1e40af;
+          border: 1px solid #bfdbfe;
+          font-size: 0.82rem;
+          font-weight: 600;
+          border-radius: 10px;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: all 0.15s;
+        }
+        .gps-btn:hover:not(:disabled) {
+          background: #dbeafe;
+        }
+        .maps-alert-banner {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 16px;
+          border-bottom: 1px solid;
+          z-index: 9;
+        }
+        .maps-alert-banner.warning {
+          background: #fffbeb;
+          border-color: #fde68a;
+        }
+        .maps-alert-banner.info {
+          background: #eff6ff;
+          border-color: #bfdbfe;
+        }
+        .maps-main-grid {
+          display: flex;
+          flex: 1;
+          height: calc(100% - 62px);
+          min-height: 500px;
+          overflow: hidden;
+          position: relative;
+        }
+        .maps-sidebar-panel {
+          width: 360px;
+          display: flex;
+          flex-direction: column;
+          background: #ffffff;
+          border-right: 1px solid #e2e8f0;
+          z-index: 5;
+        }
+        @media (max-width: 900px) {
+          .maps-sidebar-panel {
+            width: 300px;
+          }
+        }
+        .filter-controls-box {
+          padding: 14px;
+          border-bottom: 1px solid #f1f5f9;
+          background: #f8fafc;
+        }
+        .filter-row {
+          margin-bottom: 10px;
+        }
+        .filter-row:last-child {
+          margin-bottom: 0;
+        }
+        .filter-label {
+          display: block;
+          font-size: 0.75rem;
+          font-weight: 700;
+          color: #475569;
+          margin-bottom: 4px;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
+        }
+        .filter-select {
+          width: 100%;
+          padding: 6px 10px;
+          font-size: 0.8rem;
+          border: 1px solid #cbd5e1;
+          border-radius: 8px;
+          background: #ffffff;
+          outline: none;
+        }
+        .radius-range-slider {
+          width: 100%;
+          cursor: pointer;
+        }
+        .location-active-badge {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-top: 10px;
+          padding: 6px 10px;
+          background: #eff6ff;
+          border: 1px solid #dbeafe;
+          border-radius: 8px;
+        }
+        .providers-list-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 14px;
+          border-bottom: 1px solid #f1f5f9;
+        }
+        .providers-scroll-list {
+          flex: 1;
+          overflow-y: auto;
+          padding: 10px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .provider-map-card {
+          background: #ffffff;
+          border: 1px solid #e2e8f0;
+          border-radius: 12px;
+          padding: 12px;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+        .provider-map-card:hover {
+          border-color: #3b82f6;
+          box-shadow: 0 4px 12px rgba(59, 130, 246, 0.08);
+          transform: translateY(-1px);
+        }
+        .rating-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          font-size: 0.75rem;
+          font-weight: 700;
+          color: #0f172a;
+          background: #fef3c7;
+          padding: 2px 6px;
+          border-radius: 6px;
+        }
+        .empty-state-notice, .loading-state-notice {
+          padding: 30px 16px;
+          text-align: center;
+        }
+        .maps-canvas-wrapper {
+          flex: 1;
+          position: relative;
+          min-height: 500px;
+          height: 100%;
+          background: #e2e8f0;
+        }
+        .map-viewport-element {
+          position: absolute;
+          inset: 0;
+          width: 100% !important;
+          height: 100% !important;
+          z-index: 1;
+        }
+        .map-engine-badge-bar {
+          position: absolute;
+          top: 14px;
+          right: 14px;
+          z-index: 10;
+        }
+        .engine-toggle-group {
+          display: flex;
+          background: #ffffff;
+          border-radius: 10px;
+          padding: 3px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+          border: 1px solid #cbd5e1;
+        }
+        .engine-toggle-btn {
+          padding: 5px 10px;
+          font-size: 0.75rem;
+          font-weight: 600;
+          color: #475569;
+          border-radius: 7px;
+          display: flex;
+          align-items: center;
+          transition: all 0.15s;
+        }
+        .engine-toggle-btn.active {
+          background: #2563eb;
+          color: #ffffff;
+        }
+        .map-location-prompt-card {
+          position: absolute;
+          top: 16px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(255, 255, 255, 0.95);
+          backdrop-filter: blur(8px);
+          border: 1px solid #cbd5e1;
+          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+          border-radius: 14px;
+          padding: 12px 18px;
+          max-width: 380px;
+          width: 90%;
+          z-index: 9;
+        }
+        .modal-backdrop {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.6);
+          backdrop-filter: blur(4px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 50;
+          padding: 16px;
+        }
+        .modal-card {
+          background: #ffffff;
+          border-radius: 16px;
+          width: 100%;
+          max-width: 480px;
+          overflow: hidden;
+          box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+        .modal-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 16px 20px;
+          border-bottom: 1px solid #f1f5f9;
+        }
+      `}</style>
     </div>
   );
 }
