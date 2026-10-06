@@ -631,7 +631,9 @@ export default function Discover() {
 
             {recommendations.length === 0 ? (
               <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
-                <p style={{ color: 'var(--text-muted)' }}>No matching specialists found in this specific radius.</p>
+                <p style={{ color: 'var(--text-muted)' }}>
+                  {problemAnalysis?.location_error || 'No verified specialists for this service were found within 50 km of your selected location.'}
+                </p>
               </div>
             ) : (
               <div style={{

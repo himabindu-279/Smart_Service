@@ -148,13 +148,9 @@ def geocode_location(query: str) -> List[Dict]:
     except Exception as e:
         print(f"Nominatim geocoding warning for query '{query}': {e}")
 
-    # Fallback default: Bengaluru center
-    return [{
-        "display_name": f"{query.title()}, India",
-        "latitude": 12.9716,
-        "longitude": 77.5946,
-        "type": "fallback"
-    }]
+    # Never silently map an unknown place to Bengaluru. That produces plausible
+    # but incorrect recommendations for users who entered another location.
+    return []
 
 
 def suggest_locations(query: str, limit: int = 6) -> List[Dict]:

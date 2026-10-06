@@ -18,8 +18,8 @@ class AssistantService:
     async def process_chat(
         message: str,
         history: Optional[List[Dict[str, str]]] = None,
-        user_lat: Optional[float] = 12.9716,
-        user_lon: Optional[float] = 77.5946,
+        user_lat: Optional[float] = None,
+        user_lon: Optional[float] = None,
         db: Session = None
     ) -> Dict[str, Any]:
         """
@@ -137,13 +137,13 @@ class AssistantService:
 
                 system_prompt = (
                     "You are SmartService AI Assistant, a helpful customer service consultant for the "
-                    "Smart Service Marketplace in Bengaluru. "
+                    "Smart Service Marketplace. "
                     "Based on the user's issue, diagnose their requirement and recommend the appropriate marketplace service.\n"
                     f"Identified Relevant Service: {top_service.name if top_service else 'General Maintenance'} "
                     f"({top_service.category.name if top_service and top_service.category else ''})\n"
                     f"Service Description: {top_service.description if top_service else ''}\n"
                     f"Base Price: ₹{top_service.base_price if top_service else 500}\n"
-                    f"Top Verified Specialists in Bengaluru: {', '.join([p['business_name'] for p in relevant_providers[:2]])}\n"
+                    f"Top Verified Specialists near the user's location: {', '.join([p['business_name'] for p in relevant_providers[:2]])}\n"
                     "Guidance: Be warm, professional, diagnostic, and concise. Explain what the technician will inspect. "
                     "Tell the user they can book right away from Discover or check nearby locations on Maps."
                 )
@@ -155,18 +155,43 @@ class AssistantService:
                 messages.append({"role": "user", "content": message})
 
                 async with httpx.AsyncClient(timeout=15.0) as client:
-                    resp = await client.post(
-                        f"{base_url}/chat/completions",
-                        headers=headers,
-                        json={
-                            "model": settings.LLM_MODEL,
-                            "messages": messages,
-                            "temperature": 0.4
-                        }
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        llm_response = data["choices"][0]["message"]["content"]
+                    if settings.LLM_PROVIDER.lower() == "gemini":
+                        gemini_url = (
+                            f"{base_url.rstrip('/')}/models/{settings.LLM_MODEL}:generateContent"
+                            f"?key={settings.LLM_API_KEY}"
+                        )
+                        gemini_contents = [
+                            {
+                                "role": "user" if item["role"] == "user" else "model",
+                                "parts": [{"text": item["content"]}]
+                            }
+                            for item in messages if item["role"] != "system"
+                        ]
+                        resp = await client.post(
+                            gemini_url,
+                            headers={"Content-Type": "application/json"},
+                            json={
+                                "systemInstruction": {"parts": [{"text": system_prompt}]},
+                                "contents": gemini_contents,
+                                "generationConfig": {"temperature": 0.4}
+                            }
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            llm_response = data["candidates"][0]["content"]["parts"][0]["text"]
+                    else:
+                        resp = await client.post(
+                            f"{base_url}/chat/completions",
+                            headers=headers,
+                            json={
+                                "model": settings.LLM_MODEL,
+                                "messages": messages,
+                                "temperature": 0.4
+                            }
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            llm_response = data["choices"][0]["message"]["content"]
             except Exception as e:
                 logger.warning(f"External LLM call failed ({e}), using intelligent contextual synthesis.")
 

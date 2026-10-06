@@ -15,7 +15,17 @@ export default function AIAssistant() {
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [coordinates, setCoordinates] = useState({ latitude: null, longitude: null });
   const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => setCoordinates({ latitude: coords.latitude, longitude: coords.longitude }),
+      () => {},
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -38,8 +48,8 @@ export default function AIAssistant() {
       const response = await api.post('/assistant/chat', {
         message: messageText,
         history: messages.slice(-4).map((m) => ({ role: m.role, content: m.content })),
-        latitude: 12.9116,
-        longitude: 77.6389
+        latitude: coordinates.latitude,
+        longitude: coordinates.longitude
       });
 
       const assistantMessage = {
@@ -93,7 +103,7 @@ export default function AIAssistant() {
         <div>
           <h1 style={{ fontSize: '1.65rem', marginBottom: '0.15rem' }}>SmartService AI Consultant</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-            RAG-powered conversational diagnostic engine connected to real Bengaluru database services & specialists.
+            Conversational diagnostic engine connected to real marketplace services and nearby specialists.
           </p>
         </div>
       </div>

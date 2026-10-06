@@ -32,6 +32,7 @@ class ProblemAnalyzer:
         if settings.LLM_API_KEY:
             llm_result = await cls._call_external_llm(q, location)
             if llm_result:
+                cls._apply_query_overrides(llm_result, q_lower)
                 # Resolve service_id against database
                 cls._enrich_with_db(llm_result, db)
                 return llm_result
@@ -380,7 +381,39 @@ class ProblemAnalyzer:
                 "urgency": "low"
             }
 
-        # 7. Electrical Sparking / Short Circuit (Professional Service - Critical Hazard)
+        # 7. Fan Repair / Installation (Professional Electrical Service)
+        # A plain fan issue is electrical work; only an explicitly named AC fan
+        # should be routed to the HVAC services.
+        fan_terms = ["fan", "ceiling fan", "table fan", "exhaust fan", "fan regulator"]
+        if any(term in q_lower for term in fan_terms) and not any(
+            term in q_lower for term in ["ac", "air conditioner", "air conditioning"]
+        ):
+            guidance = (
+                "A fan that does not start, runs slowly, makes noise, or has a faulty regulator may have an issue with its power supply, capacitor, wiring, or motor. "
+                "Switch off the circuit before inspecting it and have a qualified electrician test the wiring and components."
+            )
+            return {
+                "decision": "PROFESSIONAL_SERVICE",
+                "classification": "PROFESSIONAL_SERVICE",
+                "needs_professional": True,
+                "show_providers": True,
+                "intent": "service_required",
+                "problem": original_query,
+                "problem_title": "Fan Repair & Electrical Inspection",
+                "guidance": guidance,
+                "response": guidance,
+                "diy_steps": [
+                    "Turn off the fan switch and the relevant circuit breaker",
+                    "Do not open the motor housing or touch exposed wiring",
+                    "Book a qualified electrician to inspect the capacitor, regulator, wiring, and motor"
+                ],
+                "follow_up_prompt": "Connecting you with verified electrical specialists near you...",
+                "category": "Home Services",
+                "service": "Electrical",
+                "urgency": "normal"
+            }
+
+        # 8. Electrical Sparking / Short Circuit (Professional Service - Critical Hazard)
         if any(term in q_lower for term in ["spark", "sparking", "short circuit", "burning smell", "shock", "mcb trip"]):
             guidance = (
                 "Sparking switchboards, burning smells, or continuous MCB tripping represent serious electrical hazards. "
@@ -509,3 +542,21 @@ class ProblemAnalyzer:
                 if first_svc.category:
                     analysis["category"] = first_svc.category.name
                     analysis["category_id"] = first_svc.category.id
+
+    @classmethod
+    def _apply_query_overrides(cls, analysis: Dict[str, Any], q_lower: str):
+        """Correct high-confidence safety/service mappings before database enrichment."""
+        fan_terms = ["fan", "ceiling fan", "table fan", "exhaust fan", "fan regulator"]
+        has_fan = any(term in q_lower for term in fan_terms)
+        mentions_ac = any(term in q_lower for term in ["ac", "air conditioner", "air conditioning"])
+        if has_fan and not mentions_ac:
+            analysis.update({
+                "category": "Home Services",
+                "service": "Electrical",
+                "show_providers": True,
+                "needs_professional": True,
+                "intent": "service_required",
+                "decision": "PROFESSIONAL_SERVICE",
+                "classification": "PROFESSIONAL_SERVICE",
+                "follow_up_prompt": "Connecting you with verified electrical specialists near you..."
+            })

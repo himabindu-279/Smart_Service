@@ -6,7 +6,7 @@ from app.models.provider import Provider
 from app.models.provider_service import ProviderService
 from app.models.service import Service
 from app.models.user import User
-from app.utils.geo import haversine_distance, geocode_location, suggest_locations, relocate_providers_around
+from app.utils.geo import haversine_distance, geocode_location, suggest_locations
 
 router = APIRouter()
 
@@ -115,16 +115,12 @@ def sync_demo_providers_near_location(
     area_name: Optional[str] = Query(None, description="Optional area or city name"),
     db: Session = Depends(get_db)
 ):
-    """
-    Relocate verified providers to surround any specified GPS coordinates (1.2 km to 8.5 km),
-    enabling live demonstration and validation from any physical location or college campus.
-    """
-    updated_count = relocate_providers_around(db, latitude, longitude, area_name)
+    """Deprecated: provider coordinates are real data and must not be relocated."""
     return {
-        "message": f"Successfully relocated {updated_count} providers around ({latitude}, {longitude})",
+        "message": "Provider coordinates are fixed to their registered service locations.",
         "target_latitude": latitude,
         "target_longitude": longitude,
-        "updated": updated_count
+        "updated": 0
     }
 
 

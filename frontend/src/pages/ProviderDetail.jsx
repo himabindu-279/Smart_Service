@@ -22,8 +22,9 @@ export default function ProviderDetail() {
     return tomorrow.toISOString().split('T')[0];
   });
   const [bookingTime, setBookingTime] = useState('10:00');
-  const [serviceAddress, setServiceAddress] = useState('14/B, 5th Cross, HSR Layout, Bengaluru');
+  const [serviceAddress, setServiceAddress] = useState('');
   const [specialInstructions, setSpecialInstructions] = useState('');
+
   const [bookingError, setBookingError] = useState('');
   const [bookingSuccess, setBookingSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);

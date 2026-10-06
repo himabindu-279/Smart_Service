@@ -46,7 +46,13 @@ def create_booking(
         ProviderService.is_active == True
     ).first()
 
-    if ps and hasattr(ps, "status") and ps.status != ServiceApprovalStatus.APPROVED:
+    if not ps:
+        raise HTTPException(
+            status_code=400,
+            detail="This provider does not offer the selected service. Please choose another provider."
+        )
+
+    if hasattr(ps, "status") and ps.status != ServiceApprovalStatus.APPROVED:
         raise HTTPException(
             status_code=400,
             detail="This provider service is currently pending administrator review and cannot be booked."
@@ -65,7 +71,7 @@ def create_booking(
             detail="The selected provider is already booked for this date and time slot. Please choose another slot."
         )
 
-    total_amount = ps.custom_price if ps else service.base_price
+    total_amount = ps.custom_price
     booking_ref = f"BK-{uuid.uuid4().hex[:8].upper()}"
 
     booking = Booking(
@@ -86,6 +92,9 @@ def create_booking(
     db.add(booking)
     db.commit()
     db.refresh(booking)
+    email_notification = EmailService.send_booking_email(
+        db=db, booking=booking, notification_type=NotificationType.BOOKING_CREATED
+    )
 
     return {
         "id": booking.id,
@@ -96,7 +105,9 @@ def create_booking(
         "booking_date": booking.booking_date,
         "booking_time": booking.booking_time,
         "total_amount": booking.total_amount,
-        "created_at": booking.created_at.isoformat()
+        "created_at": booking.created_at.isoformat(),
+        "email_notified": email_notification.sent_status in ("SENT", "MOCK_SENT"),
+        "email_status": email_notification.sent_status
     }
 
 

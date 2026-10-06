@@ -16,8 +16,8 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: Optional[List[ChatMessage]] = None
-    latitude: Optional[float] = 12.9716
-    longitude: Optional[float] = 77.5946
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 @router.post("/chat")

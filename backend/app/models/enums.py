@@ -24,6 +24,7 @@ class ServiceApprovalStatus(str, enum.Enum):
 
 
 class NotificationType(str, enum.Enum):
+    BOOKING_CREATED = "BOOKING_CREATED"
     BOOKING_CONFIRMED = "BOOKING_CONFIRMED"
     BOOKING_REJECTED = "BOOKING_REJECTED"
     BOOKING_CANCELLED = "BOOKING_CANCELLED"

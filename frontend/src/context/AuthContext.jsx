@@ -12,14 +12,22 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (token) {
+    const validationToken = token;
+    if (validationToken) {
       api.get('/users/me')
         .then((userData) => {
+          if (localStorage.getItem('token') !== validationToken) return;
           setUser(userData);
           localStorage.setItem('user', JSON.stringify(userData));
         })
         .catch(() => {
-          logout();
+          // Do not let an older validation request log out a newer session.
+          if (localStorage.getItem('token') === validationToken) {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            setToken(null);
+            setUser(null);
+          }
         })
         .finally(() => setLoading(false));
     } else {

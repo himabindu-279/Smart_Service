@@ -85,10 +85,20 @@ class RecommendationEngine:
 
         if location and (target_lat is None or target_lon is None):
             geo_results = geocode_location(location)
-            if geo_results:
-                target_lat = geo_results[0]["latitude"]
-                target_lon = geo_results[0]["longitude"]
-                resolved_location = geo_results[0]["display_name"]
+            if not geo_results:
+                return {
+                    "detected_service": target_service.name if target_service else None,
+                    "service_id": service_id,
+                    "category": target_service.category.name if target_service and target_service.category else None,
+                    "location": location,
+                    "latitude": None,
+                    "longitude": None,
+                    "location_error": "We could not resolve that location. Please choose a suggested location or use GPS.",
+                    "recommendations": []
+                }
+            target_lat = geo_results[0]["latitude"]
+            target_lon = geo_results[0]["longitude"]
+            resolved_location = geo_results[0]["display_name"]
 
         # Stage 3: Candidate Provider Selection
         # MUST have APPROVED and ACTIVE ProviderService offering target_service
@@ -102,6 +112,12 @@ class RecommendationEngine:
                 "longitude": target_lon,
                 "recommendations": []
             }
+
+        # A location-aware search must not return providers from another city.
+        # Keep no radius restriction only when the user did not provide a location.
+        effective_radius_km = radius_km
+        if effective_radius_km is None and target_lat is not None and target_lon is not None:
+            effective_radius_km = 50.0
 
         candidate_query = (
             db.query(Provider)
@@ -129,7 +145,7 @@ class RecommendationEngine:
             if target_lat is not None and target_lon is not None and p.latitude and p.longitude:
                 dist = haversine_distance(target_lat, target_lon, p.latitude, p.longitude)
                 # Location radius filtering if radius specified
-                if radius_km and dist > radius_km:
+                if effective_radius_km and dist > effective_radius_km:
                     continue
 
             # Fetch specific ProviderService details
@@ -234,5 +250,6 @@ class RecommendationEngine:
             "location": resolved_location or location,
             "latitude": target_lat,
             "longitude": target_lon,
+            "radius_km": effective_radius_km,
             "recommendations": scored_results[:max_candidates]
         }

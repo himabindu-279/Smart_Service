@@ -25,6 +25,7 @@ class RecommendRequest(BaseModel):
     location: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    radius_km: Optional[float] = None
     urgency: Optional[str] = "normal"
     max_candidates: int = 6
 
@@ -105,6 +106,7 @@ def get_recommendations(
         location=request.location,
         latitude=request.latitude,
         longitude=request.longitude,
+        radius_km=request.radius_km,
         urgency=request.urgency or "normal",
         max_candidates=request.max_candidates
     )

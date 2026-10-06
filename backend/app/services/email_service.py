@@ -39,7 +39,20 @@ class EmailService:
         service_name = booking.service.name if booking.service else "Service"
         booking_ref = booking.booking_reference or f"#{booking.id}"
 
-        if notification_type == NotificationType.BOOKING_CONFIRMED:
+        if notification_type == NotificationType.BOOKING_CREATED:
+            subject = "Service Booking Received"
+            message = (
+                f"Hello {customer_name},\n\n"
+                f"We received your service booking request. The provider will confirm it shortly.\n\n"
+                f"Service: {service_name}\n"
+                f"Provider: {provider_name}\n"
+                f"Date: {booking.booking_date}\n"
+                f"Time: {booking.booking_time}\n"
+                f"Location: {booking.service_address}\n\n"
+                f"Booking ID: #{booking_ref}\n\n"
+                f"Thank you for using Smart Service Marketplace."
+            )
+        elif notification_type == NotificationType.BOOKING_CONFIRMED:
             subject = "Service Booking Confirmed"
             message = (
                 f"Hello {customer_name},\n\n"
