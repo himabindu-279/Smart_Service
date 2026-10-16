@@ -1,12 +1,15 @@
 import uuid
+import logging
+from datetime import datetime, time, timedelta
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.booking import Booking
 from app.models.enums import BookingStatus, UserRole, NotificationType, ServiceApprovalStatus
 from app.models.provider import Provider
 from app.models.provider_service import ProviderService
+from app.models.provider_availability import ProviderAvailability
 from app.models.service import Service
 from app.models.user import User
 from app.models.email_notification import EmailNotification
@@ -15,17 +18,35 @@ from app.api.deps import get_current_active_user, require_admin
 from app.services.email_service import EmailService
 
 router = APIRouter()
+logger = logging.getLogger("uvicorn.error")
+
+
+def _booking_response(booking: Booking, email_status: str = "NOT_SENT"):
+    return {
+        "id": booking.id,
+        "booking_reference": booking.booking_reference,
+        "status": booking.status.value,
+        "service_name": booking.service.name,
+        "provider_name": booking.provider.business_name or "Service Specialist",
+        "booking_date": booking.booking_date,
+        "booking_time": booking.booking_time,
+        "total_amount": booking.total_amount,
+        "created_at": booking.created_at.isoformat(),
+        "email_notified": email_status in ("SENT", "MOCK_SENT"),
+        "email_status": email_status
+    }
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def create_booking(
     booking_in: BookingCreate,
+    response: Response,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Create a new service booking with double-booking prevention and provider availability check."""
-    provider = db.query(Provider).filter(Provider.id == booking_in.provider_id).first()
+    provider = db.query(Provider).filter(Provider.id == booking_in.provider_id).with_for_update().first()
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
 
@@ -35,7 +56,10 @@ def create_booking(
             detail="The selected provider is currently not available for bookings."
         )
 
-    service = db.query(Service).filter(Service.id == booking_in.service_id).first()
+    service = db.query(Service).filter(
+        Service.id == booking_in.service_id,
+        Service.is_active == True
+    ).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
 
@@ -43,7 +67,8 @@ def create_booking(
     ps = db.query(ProviderService).filter(
         ProviderService.provider_id == provider.id,
         ProviderService.service_id == service.id,
-        ProviderService.is_active == True
+        ProviderService.is_active == True,
+        ProviderService.status == ServiceApprovalStatus.APPROVED
     ).first()
 
     if not ps:
@@ -52,17 +77,51 @@ def create_booking(
             detail="This provider does not offer the selected service. Please choose another provider."
         )
 
-    if hasattr(ps, "status") and ps.status != ServiceApprovalStatus.APPROVED:
-        raise HTTPException(
-            status_code=400,
-            detail="This provider service is currently pending administrator review and cannot be booked."
-        )
+    if current_user.email.casefold() != str(booking_in.customer_email).casefold():
+        raise HTTPException(status_code=400, detail="Contact email must match the signed-in account.")
 
-    # Prevent double booking for the same provider at the same date and time slot
+    requested_date = booking_in.booking_date.isoformat()
+    requested_time = booking_in.booking_time.isoformat(timespec="minutes")
+
+    # Return an earlier identical request so a network retry cannot create another row.
+    duplicate = db.query(Booking).filter(
+        Booking.user_id == current_user.id,
+        Booking.provider_id == provider.id,
+        Booking.service_id == service.id,
+        Booking.booking_date == requested_date,
+        Booking.booking_time == requested_time,
+        Booking.status.in_([BookingStatus.PENDING, BookingStatus.ACCEPTED, BookingStatus.IN_PROGRESS])
+    ).first()
+    if duplicate:
+        response.status_code = status.HTTP_200_OK
+        return _booking_response(duplicate, "ALREADY_RECORDED")
+
+    # Enforce configured weekly hours. With no configured schedule, the request remains pending.
+    availability_rules = db.query(ProviderAvailability).filter(
+        ProviderAvailability.provider_id == provider.id
+    ).all()
+    if availability_rules:
+        day_rules = [rule for rule in availability_rules if rule.day_of_week == booking_in.booking_date.weekday() and rule.is_available]
+        requested_start = datetime.combine(booking_in.booking_date, booking_in.booking_time)
+        fits_schedule = False
+        for rule in day_rules:
+            try:
+                start = time.fromisoformat(rule.start_time)
+                end = time.fromisoformat(rule.end_time)
+            except ValueError:
+                continue
+            requested_end = requested_start + timedelta(minutes=service.estimated_duration_minutes)
+            if requested_start.time() >= start and requested_end.time() <= end:
+                fits_schedule = True
+                break
+        if not fits_schedule:
+            raise HTTPException(status_code=400, detail="The provider has no configured availability for that date and time.")
+
+    # Prevent overlapping requests for the selected provider.
     existing = db.query(Booking).filter(
         Booking.provider_id == booking_in.provider_id,
-        Booking.booking_date == booking_in.booking_date,
-        Booking.booking_time == booking_in.booking_time,
+        Booking.booking_date == requested_date,
+        Booking.booking_time == requested_time,
         Booking.status.in_([BookingStatus.PENDING, BookingStatus.ACCEPTED, BookingStatus.IN_PROGRESS])
     ).first()
     if existing:
@@ -71,7 +130,7 @@ def create_booking(
             detail="The selected provider is already booked for this date and time slot. Please choose another slot."
         )
 
-    total_amount = ps.custom_price
+    total_amount = ps.custom_price if ps.custom_price is not None else service.base_price
     booking_ref = f"BK-{uuid.uuid4().hex[:8].upper()}"
 
     booking = Booking(
@@ -80,8 +139,8 @@ def create_booking(
         provider_id=provider.id,
         service_id=service.id,
         provider_service_id=ps.id if ps else None,
-        booking_date=booking_in.booking_date,
-        booking_time=booking_in.booking_time,
+        booking_date=requested_date,
+        booking_time=requested_time,
         status=BookingStatus.PENDING,
         total_amount=total_amount,
         service_address=booking_in.service_address,
@@ -89,26 +148,28 @@ def create_booking(
         longitude=booking_in.longitude,
         special_instructions=booking_in.special_instructions
     )
+    current_user.full_name = booking_in.customer_full_name
+    current_user.phone = booking_in.customer_mobile
     db.add(booking)
-    db.commit()
-    db.refresh(booking)
-    email_notification = EmailService.send_booking_email(
-        db=db, booking=booking, notification_type=NotificationType.BOOKING_CREATED
-    )
+    try:
+        db.commit()
+        db.refresh(booking)
+    except Exception:
+        db.rollback()
+        logger.exception("Booking persistence failed")
+        raise HTTPException(status_code=500, detail="The booking could not be saved. Please retry.")
 
-    return {
-        "id": booking.id,
-        "booking_reference": booking.booking_reference,
-        "status": booking.status.value,
-        "service_name": service.name,
-        "provider_name": provider.business_name or "Service Specialist",
-        "booking_date": booking.booking_date,
-        "booking_time": booking.booking_time,
-        "total_amount": booking.total_amount,
-        "created_at": booking.created_at.isoformat(),
-        "email_notified": email_notification.sent_status in ("SENT", "MOCK_SENT"),
-        "email_status": email_notification.sent_status
-    }
+    email_status = "FAILED"
+    try:
+        email_notification = EmailService.send_booking_email(
+            db=db, booking=booking, notification_type=NotificationType.BOOKING_CREATED
+        )
+        email_status = email_notification.sent_status
+    except Exception:
+        db.rollback()
+        logger.warning("Booking saved, but its confirmation notification could not be recorded.")
+
+    return _booking_response(booking, email_status)
 
 
 @router.get("/my")
@@ -271,3 +332,22 @@ def get_email_notifications(
         }
         for n in notifications
     ]
+
+
+@router.get("/{booking_id}")
+def get_booking(
+    booking_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    is_owner = booking.user_id == current_user.id
+    is_assigned_provider = current_user.provider_profile and booking.provider_id == current_user.provider_profile.id
+    is_admin = current_user.role == UserRole.ADMIN
+    if not (is_owner or is_assigned_provider or is_admin):
+        raise HTTPException(status_code=403, detail="Not authorized to view this booking.")
+
+    return _booking_response(booking)

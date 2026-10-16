@@ -1,4 +1,7 @@
 const API_BASE_URL = 'http://127.0.0.1:8000/api';
+let serviceCategoriesCache;
+let serviceCategoriesRequest;
+let serviceCategoriesCachedAt = 0;
 
 export async function request(endpoint, options = {}) {
   const token = localStorage.getItem('token');
@@ -28,8 +31,14 @@ export async function request(endpoint, options = {}) {
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    const errorMsg = data?.detail || 'Request failed';
-    throw new Error(errorMsg);
+    const details = data?.detail;
+    const errorMsg = Array.isArray(details)
+      ? details.map((item) => item.msg).filter(Boolean).join('; ')
+      : details || 'Request failed';
+    const error = new Error(errorMsg);
+    error.status = response.status;
+    error.details = details;
+    throw error;
   }
 
   return data;
@@ -38,6 +47,27 @@ export async function request(endpoint, options = {}) {
 export const api = {
   get: (endpoint, params) => request(endpoint, { method: 'GET', params }),
   post: (endpoint, body, params) => request(endpoint, { method: 'POST', body: body ? JSON.stringify(body) : undefined, params }),
+  put: (endpoint, body, params) => request(endpoint, { method: 'PUT', body: body ? JSON.stringify(body) : undefined, params }),
   patch: (endpoint, body, params) => request(endpoint, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined, params }),
   delete: (endpoint) => request(endpoint, { method: 'DELETE' }),
 };
+
+export function getServiceCategories() {
+  if (serviceCategoriesCache && Date.now() - serviceCategoriesCachedAt < 30000) {
+    return Promise.resolve(serviceCategoriesCache);
+  }
+
+  if (!serviceCategoriesRequest) {
+    serviceCategoriesRequest = api.get('/categories', { only_active_providers: true })
+      .then((categories) => {
+        serviceCategoriesCache = categories;
+        serviceCategoriesCachedAt = Date.now();
+        return categories;
+      })
+      .finally(() => {
+        serviceCategoriesRequest = null;
+      });
+  }
+
+  return serviceCategoriesRequest;
+}

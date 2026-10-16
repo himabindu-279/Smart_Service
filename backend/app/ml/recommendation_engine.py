@@ -57,28 +57,37 @@ class RecommendationEngine:
         Executes the full multi-stage AI/ML recommendation pipeline using real database provider services.
         """
         target_service = None
-        bge_similarity = 0.90
-
-        # Stage 1: BGE-M3 Semantic Service Understanding
+        bge_similarity = 0.0
         all_services = db.query(Service).filter(Service.is_active == True).all()
 
         if service_id:
-            target_service = db.query(Service).filter(Service.id == service_id).first()
-            if query and target_service:
+            target_service = db.query(Service).filter(Service.id == service_id, Service.is_active == True).first()
+            if target_service and query:
                 bge_similarity = BGEM3Matcher.compute_similarity(
                     query, target_service.name, target_service.description or "", target_service.slug or ""
                 )
         elif query:
             ranked_svcs = BGEM3Matcher.rank_services(query, all_services)
             if ranked_svcs:
-                target_service, bge_similarity = ranked_svcs[0]
-                service_id = target_service.id
+                best_service, best_score = ranked_svcs[0]
+                if best_score >= 0.58:
+                    target_service = best_service
+                    service_id = best_service.id
+                    bge_similarity = best_score
 
-        if not target_service and all_services:
-            target_service = all_services[0]
-            service_id = target_service.id
+        if not target_service:
+            return {
+                "detected_service": None,
+                "service_id": None,
+                "category": None,
+                "location": location,
+                "latitude": latitude,
+                "longitude": longitude,
+                "radius_km": radius_km,
+                "recommendations": [],
+                "message": "No valid service match was found for this problem. Please refine the request to a supported service issue."
+            }
 
-        # Stage 2: Location Geocoding (if location string given without lat/lon)
         target_lat = latitude
         target_lon = longitude
         resolved_location = location
@@ -100,21 +109,6 @@ class RecommendationEngine:
             target_lon = geo_results[0]["longitude"]
             resolved_location = geo_results[0]["display_name"]
 
-        # Stage 3: Candidate Provider Selection
-        # MUST have APPROVED and ACTIVE ProviderService offering target_service
-        if not target_service:
-            return {
-                "detected_service": None,
-                "service_id": None,
-                "category": None,
-                "location": resolved_location or location,
-                "latitude": target_lat,
-                "longitude": target_lon,
-                "recommendations": []
-            }
-
-        # A location-aware search must not return providers from another city.
-        # Keep no radius restriction only when the user did not provide a location.
         effective_radius_km = radius_km
         if effective_radius_km is None and target_lat is not None and target_lon is not None:
             effective_radius_km = 50.0
@@ -140,15 +134,14 @@ class RecommendationEngine:
             if not user or not user.is_active:
                 continue
 
-            # Real Distance Calculation via Haversine
             dist = None
-            if target_lat is not None and target_lon is not None and p.latitude and p.longitude:
+            if target_lat is not None and target_lon is not None:
+                if p.latitude is None or p.longitude is None:
+                    continue
                 dist = haversine_distance(target_lat, target_lon, p.latitude, p.longitude)
-                # Location radius filtering if radius specified
                 if effective_radius_km and dist > effective_radius_km:
                     continue
 
-            # Fetch specific ProviderService details
             ps = (
                 db.query(ProviderService)
                 .filter(
@@ -162,15 +155,9 @@ class RecommendationEngine:
 
             custom_price = ps.custom_price if ps else target_service.base_price
             service_name = ps.custom_service_name or target_service.name
-
-            # Stage 4: BERT4Rec Sequential Candidate Scoring
             bert4rec_score = BERT4RecModel.score_candidate(user_history, p, service_id)
-
-            # Stage 5: HGT Graph Suitability Scoring
             hgt_dist = dist if dist is not None else 5.0
             hgt_score = HGTMatcher.compute_suitability(p, target_service, category, hgt_dist)
-
-            # Stage 6: Cross-Encoder Deep Re-Ranking
             cross_score = CrossEncoderRanker.rank_candidate(
                 query=query or target_service.name,
                 urgency=urgency,
@@ -180,13 +167,10 @@ class RecommendationEngine:
                 distance_km=hgt_dist
             )
 
-            # Stage 7: DeBERTa-v3 Sentiment Analysis on Reviews
             provider_reviews = db.query(Review).filter(Review.provider_id == p.id).all()
             sentiment_res = DeBERTaSentimentAnalyzer.evaluate_provider_reviews(provider_reviews)
             deberta_score = sentiment_res["sentiment_score"]
 
-            # Multi-Objective Fusion Scoring:
-            # Weights: BGE-M3 (20%), Spatial (15%), BERT4Rec (20%), HGT (20%), Cross-Encoder (15%), DeBERTa (10%)
             dist_normalized = max(0.50, 1.0 - (hgt_dist / 40.0))
             composite_weight = (
                 (0.20 * bge_similarity) +
@@ -196,11 +180,7 @@ class RecommendationEngine:
                 (0.15 * cross_score) +
                 (0.10 * deberta_score)
             )
-
-            # Convert to normalized percentage scale (85.0% - 99.0%)
             match_percentage = round(min(99.0, max(85.0, composite_weight * 100)), 1)
-
-            # Transparent explainable match reasons
             reasons = [
                 f"BGE-M3 Semantic Match: {int(bge_similarity * 100)}% relevance for {service_name}",
                 f"HGT Graph Suitability: {int(hgt_score * 100)}% structural compatibility",
@@ -222,7 +202,7 @@ class RecommendationEngine:
                 "rating_avg": p.rating_avg or 4.8,
                 "total_ratings": p.total_ratings or 24,
                 "match_score": match_percentage,
-                "distance_km": dist if dist is not None else 3.2,
+                "distance_km": dist,
                 "price": custom_price,
                 "is_verified": p.is_verified,
                 "is_available": p.is_available,
@@ -240,7 +220,6 @@ class RecommendationEngine:
                 }
             })
 
-        # Sort descending by match score
         scored_results.sort(key=lambda x: x["match_score"], reverse=True)
 
         return {
@@ -251,5 +230,6 @@ class RecommendationEngine:
             "latitude": target_lat,
             "longitude": target_lon,
             "radius_km": effective_radius_km,
-            "recommendations": scored_results[:max_candidates]
+            "recommendations": scored_results[:max_candidates],
+            "message": "Providers matched for the detected service." if scored_results else "No providers matched the service and constraints for this request."
         }

@@ -2,7 +2,7 @@ import React from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
-import Footer from './Footer';
+import MiniAssistant from './MiniAssistant';
 
 export default function MainLayout() {
   const location = useLocation();
@@ -22,8 +22,8 @@ export default function MainLayout() {
           <Outlet />
         </div>
 
-        {!isMapPage && <Footer />}
       </div>
+      <MiniAssistant />
     </div>
   );
 }

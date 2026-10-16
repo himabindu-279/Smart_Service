@@ -24,10 +24,19 @@ export default function ProviderDetail() {
   const [bookingTime, setBookingTime] = useState('10:00');
   const [serviceAddress, setServiceAddress] = useState('');
   const [specialInstructions, setSpecialInstructions] = useState('');
+  const [customerFullName, setCustomerFullName] = useState(user?.full_name || '');
+  const [customerMobile, setCustomerMobile] = useState(user?.phone || '');
+  const [customerEmail, setCustomerEmail] = useState(user?.email || '');
 
   const [bookingError, setBookingError] = useState('');
   const [bookingSuccess, setBookingSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setCustomerFullName(user?.full_name || '');
+    setCustomerMobile(user?.phone || '');
+    setCustomerEmail(user?.email || '');
+  }, [user]);
 
   useEffect(() => {
     api.get(`/providers/${id}`)
@@ -54,6 +63,9 @@ export default function ProviderDetail() {
       await api.post('/bookings', {
         provider_id: Number(id),
         service_id: Number(bookingServiceId),
+        customer_full_name: customerFullName,
+        customer_mobile: customerMobile,
+        customer_email: customerEmail,
         booking_date: bookingDate,
         booking_time: bookingTime,
         service_address: serviceAddress,
@@ -276,6 +288,28 @@ export default function ProviderDetail() {
                     {bookingError}
                   </div>
                 )}
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
+                    Full Name
+                  </label>
+                  <input value={customerFullName} onChange={(e) => setCustomerFullName(e.target.value)} required minLength={2} />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
+                      Mobile Number
+                    </label>
+                    <input type="tel" value={customerMobile} onChange={(e) => setCustomerMobile(e.target.value)} required minLength={8} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
+                      Email Address
+                    </label>
+                    <input type="email" value={customerEmail} readOnly required />
+                  </div>
+                </div>
 
                 <div>
                   <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>

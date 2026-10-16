@@ -15,7 +15,9 @@ class LocationBase(BaseModel):
 
 
 class LocationCreate(LocationBase):
-    pass
+    city: str = "Saved location"
+    latitude: float
+    longitude: float
 
 
 class LocationResponse(LocationBase):

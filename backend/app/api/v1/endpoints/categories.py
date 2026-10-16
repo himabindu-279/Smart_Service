@@ -1,10 +1,12 @@
-from typing import List, Optional
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.category import Category
 from app.models.service import Service
 from app.models.provider_service import ProviderService
+from app.models.provider import Provider
+from app.models.user import User
 from app.models.enums import ServiceApprovalStatus
 
 router = APIRouter()
@@ -21,48 +23,53 @@ def get_categories_with_services(
     If only_active_providers=True, only includes services with approved providers.
     """
     categories = db.query(Category).filter(Category.is_active == True).all()
-    results = []
-    
-    for cat in categories:
-        services_q = db.query(Service).filter(Service.category_id == cat.id, Service.is_active == True)
-        services = services_q.all()
-        matched_services = []
+    service_counts = dict(
+        db.query(Service.id, func.count(ProviderService.id))
+        .outerjoin(
+            ProviderService,
+            (ProviderService.service_id == Service.id)
+            & (ProviderService.is_active == True)
+            & (ProviderService.status == ServiceApprovalStatus.APPROVED),
+        )
+        .outerjoin(Provider, Provider.id == ProviderService.provider_id)
+        .outerjoin(User, User.id == Provider.user_id)
+        .filter(
+            Service.is_active == True,
+            (ProviderService.id == None)
+            | ((Provider.is_available == True) & (User.is_active == True)),
+        )
+        .group_by(Service.id)
+        .all()
+    )
+    services = db.query(Service).filter(Service.is_active == True).all()
+    services_by_category = {}
 
-        for s in services:
-            # Check if any approved active provider offers this service
-            provider_count = (
-                db.query(ProviderService)
-                .filter(
-                    ProviderService.service_id == s.id,
-                    ProviderService.is_active == True,
-                    ProviderService.status == ServiceApprovalStatus.APPROVED
-                )
-                .count()
-            )
-
-            if only_active_providers and provider_count == 0:
-                continue
-
-            matched_services.append({
-                "id": s.id,
-                "name": s.name,
-                "slug": s.slug,
-                "description": s.description,
-                "base_price": s.base_price,
-                "estimated_duration_minutes": s.estimated_duration_minutes,
-                "active_providers_count": provider_count
-            })
-
-        if only_active_providers and not matched_services:
+    for service in services:
+        provider_count = service_counts.get(service.id, 0)
+        if only_active_providers and provider_count == 0:
             continue
 
-        results.append({
-            "id": cat.id,
-            "name": cat.name,
-            "slug": cat.slug,
-            "description": cat.description,
-            "icon": cat.icon,
-            "services": matched_services
+        services_by_category.setdefault(service.category_id, []).append({
+            "id": service.id,
+            "name": service.name,
+            "slug": service.slug,
+            "description": service.description,
+            "base_price": service.base_price,
+            "estimated_duration_minutes": service.estimated_duration_minutes,
+            "active_providers_count": provider_count,
         })
+
+    results = [
+        {
+            "id": category.id,
+            "name": category.name,
+            "slug": category.slug,
+            "description": category.description,
+            "icon": category.icon,
+            "services": services_by_category.get(category.id, []),
+        }
+        for category in categories
+        if not only_active_providers or services_by_category.get(category.id)
+    ]
 
     return results

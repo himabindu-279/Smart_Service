@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { User, LogOut, LogIn, Shield, Briefcase } from 'lucide-react';
 
 export default function Topbar() {
-  const { user, logout, isProvider, isAdmin } = useAuth();
+  const { user, logout, isProvider, isAdmin, sessionError } = useAuth();
   const navigate = useNavigate();
 
   const handleLogout = () => {
@@ -18,7 +18,7 @@ export default function Topbar() {
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
           <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', display: 'inline-block' }}></span>
-          <span>Smart Service Marketplace Live</span>
+          <span>{sessionError || 'Smart Service Marketplace Live'}</span>
         </div>
       </div>
 

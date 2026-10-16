@@ -27,7 +27,7 @@ class BGEM3Matcher:
             "dense_weight": 0.94
         },
         "cleaning": {
-            "keywords": ["clean", "sofa", "carpet", "dust", "deep clean", "kitchen", "bathroom", "mop", "stain", "vacuum", "sanitize", "housekeeping", "disinfect"],
+            "keywords": ["clean", "sofa", "carpet", "dust", "deep clean", "mop", "stain", "vacuum", "sanitize", "housekeeping", "disinfect", "washing", "scrub"],
             "category": "Home Services",
             "dense_weight": 0.92
         },
@@ -112,33 +112,53 @@ class BGEM3Matcher:
     def compute_similarity(cls, query: str, service_name: str, service_description: str = "", service_slug: str = "") -> float:
         """
         Computes BGE-M3 Dense + Lexical Sparse multi-granularity similarity score in [0.0, 1.0].
+        Prioritizes service-specific repair anchors (like leak/sink/pipe for plumbing, fan for electrical,
+        clean/sofa for cleaning) and penalizes generic room words or cross-category clutter that would otherwise
+        cause unrelated providers to rank above the true match.
         """
         q_clean = query.lower().strip()
         words = re.findall(r'\b[a-z]{3,}\b', q_clean)
         if not words:
-            return 0.50
+            return 0.0
+
+        generic_tokens = {
+            "repair", "service", "issue", "problem", "fix", "need", "someone", "looking", "thing",
+            "help", "works", "working", "broken", "function", "home", "house", "my", "the", "and",
+            "for", "with", "near", "local", "person", "kitchen", "bathroom"
+        }
+        meaningful_words = [w for w in words if w not in generic_tokens]
+        if not meaningful_words:
+            return 0.0
 
         slug = service_slug.lower().replace("_", "-")
         target_info = cls.SERVICE_TAXONOMY_VECTORS.get(slug)
 
-        # 1. Dense Semantic Alignment
         dense_score = 0.0
         if target_info:
             matched_kw = sum(1 for kw in target_info["keywords"] if kw in q_clean)
             if matched_kw > 0:
                 dense_score = min(1.0, 0.65 + (matched_kw * 0.12))
-            elif any(w in slug for w in words):
-                dense_score = 0.75
 
-        # 2. Sparse Lexical Token Matching (BM25-style term frequency)
+            plumbing_anchor = any(term in q_clean for term in ["leak", "pipe", "sink", "faucet", "drain", "tap", "toilet", "shower", "water leakage"])
+            cleaning_anchor = any(term in q_clean for term in ["clean", "dust", "sofa", "carpet", "mop", "scrub", "vacuum", "sanitize"]) 
+
+            if slug == "plumbing" and plumbing_anchor:
+                dense_score += 0.18
+            elif slug != "plumbing" and plumbing_anchor:
+                dense_score -= 0.25
+
+            if slug == "cleaning" and cleaning_anchor:
+                dense_score += 0.10
+            elif slug != "cleaning" and cleaning_anchor and "clean" in q_clean and "house" in q_clean:
+                dense_score -= 0.15
+
         s_text = f"{service_name} {service_description}".lower()
-        exact_matches = sum(1 for w in words if w in s_text)
-        sparse_score = min(1.0, exact_matches / max(len(words), 1))
+        exact_matches = sum(1 for w in meaningful_words if w in s_text)
+        sparse_score = min(1.0, exact_matches / max(len(meaningful_words), 1)) if meaningful_words else 0.0
 
-        # 3. Hybrid fusion (Dense 70% + Sparse 30%)
         hybrid_score = (0.70 * dense_score) + (0.30 * sparse_score)
-        if hybrid_score < 0.20:
-            hybrid_score = 0.20  # baseline floor
+        if hybrid_score < 0.0:
+            hybrid_score = 0.0
 
         return round(min(0.99, hybrid_score), 4)
 

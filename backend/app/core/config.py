@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     ]
 
     # Initial Superuser
-    FIRST_SUPERUSER_EMAIL: str = "admin@marketplace.com"
+    FIRST_SUPERUSER_EMAIL: str = "chandakahimabindu6@gmail.com"
     FIRST_SUPERUSER_PASSWORD: str = "AdminPassword123!"
     FIRST_SUPERUSER_NAME: str = "System Administrator"
 

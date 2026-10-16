@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { UserPlus, User, Briefcase } from 'lucide-react';
+import { UserPlus, User, Briefcase, Shield } from 'lucide-react';
 
 export default function Register() {
   const [role, setRole] = useState('USER');
@@ -19,13 +19,33 @@ export default function Register() {
 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { register } = useAuth();
+  const { register, login, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const requestedNext = new URLSearchParams(location.search).get('next');
+  const nextPath = requestedNext?.startsWith('/') && !requestedNext.startsWith('//') ? requestedNext : '/discover';
+  const adminNextPath = requestedNext?.startsWith('/') && !requestedNext.startsWith('//') ? requestedNext : '/dashboard?tab=analytics';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
+
+    if (role === 'ADMIN') {
+      try {
+        const authenticatedUser = await login(email, password);
+        if (authenticatedUser.role !== 'ADMIN') {
+          logout();
+          throw new Error('This account does not have administrator access.');
+        }
+        navigate(adminNextPath);
+      } catch (err) {
+        setError(err.message || 'Administrator sign-in failed. Check your credentials.');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
 
     const payload = {
       full_name: fullName,
@@ -47,7 +67,7 @@ export default function Register() {
 
     try {
       await register(payload);
-      navigate('/discover');
+      navigate(nextPath);
     } catch (err) {
       setError(err.message || 'Registration failed. Please try again.');
     } finally {
@@ -72,16 +92,16 @@ export default function Register() {
           }}>
             <UserPlus size={24} />
           </div>
-          <h1 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>Create Your Account</h1>
+          <h1 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>{role === 'ADMIN' ? 'Administrator Sign In' : 'Create Your Account'}</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-            Join the smart AI service network as a customer or certified specialist.
+            {role === 'ADMIN' ? 'Sign in with your authorized administrator account.' : 'Join the smart AI service network as a customer or certified specialist.'}
           </p>
         </div>
 
         {/* Role Selector Tabs */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
           gap: '0.5rem',
           background: 'var(--bg-main)',
           padding: '0.35rem',
@@ -90,7 +110,7 @@ export default function Register() {
         }}>
           <button
             type="button"
-            onClick={() => setRole('USER')}
+            onClick={() => { setRole('USER'); setError(''); }}
             style={{
               padding: '0.6rem',
               borderRadius: 'var(--radius-sm)',
@@ -111,7 +131,7 @@ export default function Register() {
 
           <button
             type="button"
-            onClick={() => setRole('PROVIDER')}
+            onClick={() => { setRole('PROVIDER'); setError(''); }}
             style={{
               padding: '0.6rem',
               borderRadius: 'var(--radius-sm)',
@@ -129,6 +149,28 @@ export default function Register() {
             <Briefcase size={16} />
             <span>Service Specialist</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => { setRole('ADMIN'); setError(''); }}
+            style={{
+              padding: '0.6rem 0.35rem',
+              borderRadius: 'var(--radius-sm)',
+              fontWeight: 600,
+              fontSize: '0.85rem',
+              background: role === 'ADMIN' ? '#ffffff' : 'transparent',
+              color: role === 'ADMIN' ? '#7c3aed' : 'var(--text-muted)',
+              boxShadow: role === 'ADMIN' ? 'var(--shadow-sm)' : 'none',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.4rem',
+              minWidth: 0,
+            }}
+          >
+            <Shield size={16} />
+            <span>Admin</span>
+          </button>
         </div>
 
         {error && (
@@ -145,7 +187,7 @@ export default function Register() {
         )}
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.15rem' }}>
-          <div>
+          {role !== 'ADMIN' && <div>
             <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
               Full Name
             </label>
@@ -156,9 +198,9 @@ export default function Register() {
               onChange={(e) => setFullName(e.target.value)}
               required
             />
-          </div>
+          </div>}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: role === 'ADMIN' ? '1fr' : '1fr 1fr', gap: '1rem' }}>
             <div>
               <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
                 Email
@@ -171,7 +213,7 @@ export default function Register() {
                 required
               />
             </div>
-            <div>
+            {role !== 'ADMIN' && <div>
               <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
                 Phone Number
               </label>
@@ -181,7 +223,7 @@ export default function Register() {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />
-            </div>
+            </div>}
           </div>
 
           <div>
@@ -282,12 +324,12 @@ export default function Register() {
             className="btn btn-primary"
             style={{ width: '100%', padding: '0.75rem', marginTop: '0.5rem' }}
           >
-            {loading ? 'Creating Account...' : `Register as ${role === 'PROVIDER' ? 'Provider' : 'Customer'}`}
+            {loading ? (role === 'ADMIN' ? 'Signing in...' : 'Creating account...') : role === 'ADMIN' ? 'Sign In as Admin' : `Register as ${role === 'PROVIDER' ? 'Provider' : 'Customer'}`}
           </button>
         </form>
 
         <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-          Already have an account? <Link to="/login" style={{ fontWeight: 600 }}>Sign In</Link>
+          {role === 'ADMIN' ? <>Not an administrator? <Link to="/login" style={{ fontWeight: 600 }}>Go to login</Link></> : <>Already have an account? <Link to="/login" style={{ fontWeight: 600 }}>Sign In</Link></>}
         </div>
       </div>
     </div>

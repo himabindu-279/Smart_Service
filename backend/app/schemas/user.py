@@ -30,9 +30,9 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(None, min_length=2)
     phone: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(None, min_length=6)
 
 
 class UserResponse(BaseModel):

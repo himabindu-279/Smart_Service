@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 
 export default function Dashboard() {
-  const { user, isProvider, isAdmin, isUser } = useAuth();
+  const { user, isProvider, isAdmin, isUser, updateUser } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Active Tab state synced with URL search params
@@ -91,6 +91,12 @@ export default function Dashboard() {
 
   // ================= USER STATE =================
   const [userBookings, setUserBookings] = useState([]);
+  const [savedUserLocation, setSavedUserLocation] = useState(null);
+  const [editUserName, setEditUserName] = useState(user?.full_name || '');
+  const [editUserPhone, setEditUserPhone] = useState(user?.phone || '');
+  const [editUserLocation, setEditUserLocation] = useState('');
+  const [savingUserProfile, setSavingUserProfile] = useState(false);
+  const [userProfileMessage, setUserProfileMessage] = useState('');
 
   useEffect(() => {
     loadDashboardData();
@@ -148,9 +154,15 @@ export default function Dashboard() {
           setPubLocation(pProfile.address);
         }
       } else {
-        // Customer bookings
-        const uBookings = await api.get('/bookings/my');
+        const [uBookings, savedLocation] = await Promise.all([
+          api.get('/bookings/my'),
+          api.get('/users/me/location'),
+        ]);
         setUserBookings(uBookings);
+        setSavedUserLocation(savedLocation);
+        setEditUserName(user?.full_name || '');
+        setEditUserPhone(user?.phone || '');
+        setEditUserLocation(savedLocation?.address_line || savedLocation?.city || '');
       }
     } catch (err) {
       console.error('Error loading dashboard data:', err);
@@ -320,6 +332,60 @@ export default function Dashboard() {
     }
   };
 
+  const handleSaveCustomerProfile = async (event) => {
+    event.preventDefault();
+    setSavingUserProfile(true);
+    setUserProfileMessage('');
+
+    try {
+      let locationData = null;
+      if (editUserLocation.trim()) {
+        if (editUserLocation.trim() === savedUserLocation?.address_line) {
+          locationData = {
+            title: 'Home',
+            address_line: savedUserLocation.address_line,
+            city: savedUserLocation.city,
+            state: savedUserLocation.state,
+            latitude: savedUserLocation.latitude,
+            longitude: savedUserLocation.longitude,
+            is_primary: true,
+          };
+        } else {
+          const geocoded = await api.get('/maps/geocode', { query: editUserLocation.trim() });
+          const match = geocoded[0];
+          if (!match) throw new Error('We could not find that location. Choose a recognized city or area.');
+          locationData = {
+            title: 'Home',
+            address_line: match.display_name,
+            city: match.city || match.display_name.split(',')[0],
+            state: match.state || null,
+            latitude: match.latitude,
+            longitude: match.longitude,
+            is_primary: true,
+          };
+        }
+      }
+
+      const updatedUser = await api.put('/users/me', {
+        full_name: editUserName.trim(),
+        phone: editUserPhone.trim() || null,
+      });
+      updateUser(updatedUser);
+
+      if (locationData) {
+        const savedLocation = await api.put('/users/me/location', locationData);
+        setSavedUserLocation(savedLocation);
+        setEditUserLocation(savedLocation.address_line);
+      }
+
+      setUserProfileMessage('Profile details and service location saved.');
+    } catch (err) {
+      setUserProfileMessage(err.message || 'Could not save your profile. Please try again.');
+    } finally {
+      setSavingUserProfile(false);
+    }
+  };
+
   const handleToggleAvailability = async () => {
     if (!providerProfile) return;
     const newAvail = !providerProfile.is_available;
@@ -461,9 +527,22 @@ export default function Dashboard() {
               </button>
             </>
           ) : (
-            <button className="btn btn-sm btn-primary">
-              My Service Bookings
-            </button>
+            <>
+              <button
+                onClick={() => switchTab('bookings')}
+                className={`btn btn-sm ${activeTab === 'bookings' ? 'btn-primary' : 'btn-secondary'}`}
+              >
+                <CalendarCheck size={15} />
+                <span>My bookings ({userBookings.length})</span>
+              </button>
+              <button
+                onClick={() => switchTab('profile')}
+                className={`btn btn-sm ${activeTab === 'profile' ? 'btn-primary' : 'btn-secondary'}`}
+              >
+                <UserCheck size={15} />
+                <span>My profile</span>
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -1328,6 +1407,67 @@ export default function Dashboard() {
           {/* 3. CUSTOMER PORTAL PANELS (Requirement 11)               */}
           {/* ======================================================== */}
           {!isAdmin && !isProvider && (
+            activeTab === 'profile' ? (
+              <div className="customer-profile-layout">
+                <section className="card customer-profile-summary">
+                  <div className="customer-profile-avatar">{user.full_name?.[0]?.toUpperCase() || 'U'}</div>
+                  <h2>{user.full_name}</h2>
+                  <p>{user.email}</p>
+                  <span className="badge badge-primary">Customer account</span>
+                  <div className="customer-profile-location">
+                    <MapPin size={17} />
+                    <span>{savedUserLocation?.address_line || 'Add a service location to get nearby recommendations.'}</span>
+                  </div>
+                  <div className="customer-profile-stat">
+                    <CalendarCheck size={17} />
+                    <span>{userBookings.length} service booking{userBookings.length === 1 ? '' : 's'}</span>
+                  </div>
+                </section>
+
+                <section className="card customer-profile-editor">
+                  <div className="customer-profile-editor-heading">
+                    <div>
+                      <span className="customer-profile-kicker">Account settings</span>
+                      <h2>Personal details</h2>
+                      <p>Keep your contact details and usual service area ready for your next search.</p>
+                    </div>
+                    <MapPin size={23} color="var(--primary)" />
+                  </div>
+
+                  <form onSubmit={handleSaveCustomerProfile} className="customer-profile-form">
+                    <div>
+                      <label htmlFor="profile-full-name">Full name</label>
+                      <input id="profile-full-name" value={editUserName} onChange={(event) => setEditUserName(event.target.value)} required minLength={2} />
+                    </div>
+                    <div>
+                      <label htmlFor="profile-email">Email address</label>
+                      <input id="profile-email" type="email" value={user.email} disabled />
+                    </div>
+                    <div>
+                      <label htmlFor="profile-phone">Mobile number</label>
+                      <input id="profile-phone" type="tel" value={editUserPhone} onChange={(event) => setEditUserPhone(event.target.value)} placeholder="Add a contact number" />
+                    </div>
+                    <div>
+                      <label htmlFor="profile-location">Usual service location</label>
+                      <input
+                        id="profile-location"
+                        value={editUserLocation}
+                        onChange={(event) => setEditUserLocation(event.target.value)}
+                        placeholder="City or neighborhood"
+                        required
+                      />
+                      <span className="customer-profile-hint">We use this location to match nearby providers. You can change it any time.</span>
+                    </div>
+                    {userProfileMessage && <div className="customer-profile-message" role="status">{userProfileMessage}</div>}
+                    <div className="customer-profile-form-actions">
+                      <button type="submit" disabled={savingUserProfile} className="btn btn-primary">
+                        {savingUserProfile ? 'Saving profile...' : 'Save profile'}
+                      </button>
+                    </div>
+                  </form>
+                </section>
+              </div>
+            ) : (
             <div className="card" style={{ padding: '1.75rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
                 <h3 style={{ fontSize: '1.3rem' }}>My Service Bookings ({userBookings.length})</h3>
@@ -1404,6 +1544,7 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
+            )
           )}
         </>
       )}

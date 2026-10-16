@@ -5,6 +5,8 @@ from app.db.session import get_db
 from app.models.service import Service
 from app.models.category import Category
 from app.models.provider_service import ProviderService
+from app.models.provider import Provider
+from app.models.user import User
 from app.models.enums import ServiceApprovalStatus
 
 router = APIRouter()
@@ -27,12 +29,15 @@ def get_services(
 
     for s in services:
         provider_count = (
-            db.query(ProviderService)
+            db.query(ProviderService.id)
             .filter(
                 ProviderService.service_id == s.id,
                 ProviderService.is_active == True,
                 ProviderService.status == ServiceApprovalStatus.APPROVED
             )
+            .join(Provider, Provider.id == ProviderService.provider_id)
+            .join(User, User.id == Provider.user_id)
+            .filter(Provider.is_available == True, User.is_active == True)
             .count()
         )
 
@@ -57,17 +62,20 @@ def get_services(
 @router.get("/{service_id}")
 def get_service_detail(service_id: int, db: Session = Depends(get_db)):
     """Retrieve details for a single service."""
-    service = db.query(Service).filter(Service.id == service_id).first()
+    service = db.query(Service).filter(Service.id == service_id, Service.is_active == True).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
 
     provider_count = (
-        db.query(ProviderService)
+        db.query(ProviderService.id)
         .filter(
             ProviderService.service_id == service.id,
             ProviderService.is_active == True,
             ProviderService.status == ServiceApprovalStatus.APPROVED
         )
+        .join(Provider, Provider.id == ProviderService.provider_id)
+        .join(User, User.id == Provider.user_id)
+        .filter(Provider.is_available == True, User.is_active == True)
         .count()
     )
 

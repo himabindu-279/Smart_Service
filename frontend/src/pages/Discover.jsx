@@ -26,6 +26,11 @@ import {
 export default function Discover() {
   const [query, setQuery] = useState('');
   const [location, setLocation] = useState('');
+  const [selectedLocation, setSelectedLocation] = useState(null);
+  const [locationSuggestions, setLocationSuggestions] = useState([]);
+  const [locationSaved, setLocationSaved] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [locationError, setLocationError] = useState('');
   const [resolvedLocation, setResolvedLocation] = useState('');
   const [detectingGps, setDetectingGps] = useState(false);
   const [categories, setCategories] = useState([]);
@@ -63,14 +68,56 @@ export default function Discover() {
   ];
 
   useEffect(() => {
-    // Load categories
+    let isMounted = true;
     api.get('/categories')
-      .then(setCategories)
+      .then((data) => { if (isMounted) setCategories(data); })
       .catch(console.error);
 
-    // Initial default analysis for Discover entry point without hardcoded city
-    handleProblemAnalysis('My AC is running but not cooling', '');
-  }, []);
+    const loadSavedLocation = async () => {
+      try {
+        const savedLocation = user
+          ? await api.get('/users/me/location')
+          : JSON.parse(localStorage.getItem('serviceLocation') || 'null');
+        const localLocation = JSON.parse(localStorage.getItem('serviceLocation') || 'null');
+        const storedLocation = savedLocation || localLocation;
+        if (!isMounted || !storedLocation) return;
+
+        const displayName = storedLocation.display_name || storedLocation.address_line || storedLocation.city;
+        setLocation(displayName);
+        setSelectedLocation({
+          display_name: displayName,
+          latitude: storedLocation.latitude,
+          longitude: storedLocation.longitude,
+          city: storedLocation.city,
+          state: storedLocation.state,
+        });
+        setLocationSaved(Boolean(user ? savedLocation : localLocation));
+      } catch (err) {
+        console.error('Could not load saved service location:', err);
+      }
+    };
+
+    loadSavedLocation();
+    return () => { isMounted = false; };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (location.length < 2 || selectedLocation?.display_name === location) {
+      setLocationSuggestions([]);
+      return undefined;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const suggestions = await api.get('/maps/search-suggestions', { query: location, limit: 5 });
+        setLocationSuggestions(suggestions);
+      } catch {
+        setLocationSuggestions([]);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [location, selectedLocation]);
 
   /**
    * Main Discover Flow:
@@ -107,9 +154,10 @@ export default function Discover() {
     setLoading(true);
     setShowProvidersForSimple(forceShowProviders);
     setCheckedSteps({});
+    setRecommendations([]);
+    setProblemAnalysis(null);
 
     try {
-      // 1. LLM analyzes request & classifies intent into Simple Guidance vs Professional Service
       const analysis = await api.post('/ai/analyze-problem', {
         query: searchQuery.trim(),
         location: targetLocation || undefined,
@@ -117,20 +165,15 @@ export default function Discover() {
 
       setProblemAnalysis(analysis);
 
-      // 2. Branch according to decision
-      if (analysis.decision === 'PROFESSIONAL_SERVICE' || forceShowProviders) {
-        // Professional service flow:
-        // Identify service -> Get user location -> Find nearby providers -> Availability filtering -> AI recommendation -> Provider ranking -> Show providers
+      if (analysis.decision === 'PROFESSIONAL_SERVICE' && analysis.service_id && !analysis.message) {
         const reqPayload = {
           query: searchQuery,
           service_id: analysis.service_id,
           location: targetLocation || undefined,
+          latitude: coords?.latitude,
+          longitude: coords?.longitude,
           max_candidates: 6
         };
-        if (coords?.latitude && coords?.longitude) {
-          reqPayload.latitude = coords.latitude;
-          reqPayload.longitude = coords.longitude;
-        }
 
         const recRes = await api.post('/ai/recommend', reqPayload);
         setRecommendations(recRes.recommendations || []);
@@ -138,12 +181,16 @@ export default function Discover() {
           setResolvedLocation(recRes.location);
         }
       } else {
-        // Simple problem flow:
-        // LLM provides useful guidance first. Do NOT immediately show providers for every small problem.
         setRecommendations([]);
       }
     } catch (err) {
       console.error('Error analyzing problem in Discover:', err);
+      setRecommendations([]);
+      setProblemAnalysis({
+        decision: 'NO_MATCH',
+        message: 'We could not analyze this request. Please try a more specific service description.',
+        show_providers: false,
+      });
     } finally {
       setLoading(false);
     }
@@ -151,16 +198,23 @@ export default function Discover() {
 
   // User escalation: when simple problem guidance is not enough and user explicitly requests professional service
   const handleEscalateToProfessional = async () => {
+    if (!problemAnalysis?.service_id) {
+      setRecommendations([]);
+      return;
+    }
+
     setShowProvidersForSimple(true);
     setLoading(true);
     try {
       const targetQuery = query || problemAnalysis?.query || 'General Service';
-      const svcId = problemAnalysis?.service_id || 1;
+      const svcId = problemAnalysis?.service_id;
 
       const reqPayload = {
         query: targetQuery,
         service_id: svcId,
         location: location || undefined,
+        latitude: selectedLocation?.latitude,
+        longitude: selectedLocation?.longitude,
         max_candidates: 6
       };
       const recRes = await api.post('/ai/recommend', reqPayload);
@@ -177,32 +231,85 @@ export default function Discover() {
 
   const handleSearch = (e) => {
     e.preventDefault();
-    if (query.trim()) {
-      handleProblemAnalysis(query, location);
+    setSearchError('');
+    setLocationError('');
+
+    if (!query.trim()) {
+      setSearchError('Describe the problem you need help with before searching.');
+      return;
     }
+
+    if (!selectedLocation) {
+      setLocationError('Choose a suggested location or use your current location to see nearby providers.');
+      return;
+    }
+
+    const saveLocationAndSearch = async () => {
+      try {
+        if (!locationSaved) {
+          const savedPayload = {
+            title: 'Home',
+            address_line: selectedLocation.display_name,
+            city: selectedLocation.city || selectedLocation.display_name.split(',')[0],
+            state: selectedLocation.state || null,
+            latitude: selectedLocation.latitude,
+            longitude: selectedLocation.longitude,
+            is_primary: true,
+          };
+
+          if (user) await api.put('/users/me/location', savedPayload);
+          else localStorage.setItem('serviceLocation', JSON.stringify({ ...savedPayload, display_name: selectedLocation.display_name }));
+          setLocationSaved(true);
+        }
+
+        handleProblemAnalysis(query, selectedLocation.display_name, {
+          latitude: selectedLocation.latitude,
+          longitude: selectedLocation.longitude,
+        });
+      } catch (err) {
+        setLocationError(err.message || 'Could not save your service location. Try again.');
+      }
+    };
+
+    saveLocationAndSearch();
   };
 
   const handleDetectGpsForDiscover = () => {
     if (!navigator.geolocation) {
-      alert('Geolocation is not supported by your browser.');
+      setLocationError('Location detection is not supported by this browser.');
       return;
     }
     setDetectingGps(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
-        const gpsLabel = `Current Location (${latitude.toFixed(2)}, ${longitude.toFixed(2)})`;
-        setLocation(gpsLabel);
+        const gpsLocation = {
+          display_name: `Current location (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`,
+          latitude,
+          longitude,
+          city: 'Current location',
+        };
+        setSelectedLocation(gpsLocation);
+        setLocation(gpsLocation.display_name);
+        setLocationSaved(false);
+        setLocationError('');
         setDetectingGps(false);
-        handleProblemAnalysis(query || 'AC Repair', 'Current GPS Location', { latitude, longitude });
       },
       (err) => {
         console.warn('GPS error:', err);
         setDetectingGps(false);
-        alert('Could not detect location. Please type your city name manually.');
+        setLocationError('Could not detect location. Select a city or area from the suggestions.');
       },
       { timeout: 8000, enableHighAccuracy: true }
     );
+  };
+
+  const selectSuggestedLocation = (suggestion) => {
+    setSelectedLocation(suggestion);
+    setLocation(suggestion.display_name);
+    setLocationSuggestions([]);
+    setLocationSaved(false);
+    setLocationError('');
   };
 
   const openBookModal = (provider) => {
@@ -262,97 +369,103 @@ export default function Discover() {
             <span>AI Diagnostic Problem Triage</span>
           </div>
 
-          <h1 style={{ fontSize: '2.4rem', marginBottom: '0.75rem', letterSpacing: '-0.02em' }}>
-            Describe Any Service Problem
+          <h1 style={{ fontSize: '2.4rem', marginBottom: '0.75rem' }}>
+            Find the right help, nearby
           </h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '1.05rem', marginBottom: '1.75rem' }}>
-            Type any issue naturally. Our AI analyzes your request, provides step-by-step DIY guidance for simple problems, and connects you to verified specialists when professional service is required.
+            Tell us what needs fixing. We will match your request with verified specialists serving your area.
           </p>
 
-          {/* Search Box: Service Problem Input + Location Beside It */}
-          <form onSubmit={handleSearch} style={{
-            display: 'flex',
-            alignItems: 'center',
-            background: '#ffffff',
-            borderRadius: 'var(--radius-full)',
-            padding: '0.35rem 0.5rem 0.35rem 1.25rem',
-            boxShadow: 'var(--shadow-lg)',
-            border: '2px solid var(--primary-glow)',
-            marginBottom: '0.85rem',
-            gap: '0.5rem',
-            flexWrap: 'wrap'
-          }}>
-            {/* 1. Problem Description Input */}
-            <div style={{ display: 'flex', alignItems: 'center', flex: '1.6', minWidth: '240px' }}>
-              <Search size={20} color="var(--primary)" style={{ flexShrink: 0, marginRight: '0.6rem' }} />
+          <form onSubmit={handleSearch} className="discover-search-form">
+            <label className="discover-field-label" htmlFor="problem-search">What do you need help with?</label>
+            <div className="discover-problem-input">
+              <Search size={20} aria-hidden="true" />
               <input
-                type="text"
-                placeholder="Describe your issue (e.g. My AC remote is not working, pipe leaking...)"
+                id="problem-search"
+                type="search"
+                placeholder="For example, my kitchen tap is leaking"
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                style={{
-                  border: 'none',
-                  boxShadow: 'none',
-                  padding: '0.6rem 0',
-                  fontSize: '0.95rem',
-                  width: '100%'
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setSearchError('');
+                  setProblemAnalysis(null);
+                  setRecommendations([]);
+                  setResolvedLocation('');
                 }}
+                autoComplete="off"
+                required
               />
+              {query && (
+                <button type="button" className="discover-clear-button" onClick={() => setQuery('')} aria-label="Clear problem description">
+                  <X size={17} />
+                </button>
+              )}
             </div>
 
-            {/* Vertical Divider */}
-            <div style={{ width: '1px', height: '28px', background: 'var(--border)' }} />
+            <div className="discover-location-row">
+              <div className="discover-location-field">
+                <label className="discover-field-label" htmlFor="service-location">Where should we look?</label>
+                <div className="discover-location-input">
+                  <MapPin size={19} aria-hidden="true" />
+                  <input
+                    id="service-location"
+                    type="text"
+                    placeholder="Search city or area"
+                    value={location}
+                    onChange={(event) => {
+                      setLocation(event.target.value);
+                      setSelectedLocation(null);
+                      setLocationSaved(false);
+                      setLocationError('');
+                      setProblemAnalysis(null);
+                      setRecommendations([]);
+                      setResolvedLocation('');
+                    }}
+                    autoComplete="address-level2"
+                    aria-autocomplete="list"
+                    aria-controls="location-suggestions"
+                  />
+                  <button
+                    type="button"
+                    className="discover-gps-button"
+                    onClick={handleDetectGpsForDiscover}
+                    disabled={detectingGps}
+                    title="Use current location"
+                    aria-label="Use current location"
+                  >
+                    <Navigation size={17} className={detectingGps ? 'spin' : ''} />
+                  </button>
+                  {locationSuggestions.length > 0 && (
+                    <div id="location-suggestions" className="discover-location-suggestions" role="listbox">
+                      {locationSuggestions.map((suggestion) => (
+                        <button
+                          key={`${suggestion.latitude}-${suggestion.longitude}`}
+                          type="button"
+                          role="option"
+                          aria-selected={selectedLocation?.display_name === suggestion.display_name}
+                          onClick={() => selectSuggestedLocation(suggestion)}
+                        >
+                          <MapPin size={16} />
+                          <span>{suggestion.display_name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className={`discover-location-status ${locationError ? 'error' : ''}`} aria-live="polite">
+                  {locationError || (selectedLocation
+                    ? `${locationSaved ? 'Saved to your profile' : 'Selected'} · ${selectedLocation.display_name}`
+                    : 'Choose a suggested place or use GPS for accurate nearby results.')}
+                </div>
+              </div>
 
-            {/* 2. Target Location (Requirement 4) */}
-            <div style={{ display: 'flex', alignItems: 'center', flex: '1.2', minWidth: '220px' }}>
-              <MapPin size={18} color="#ef4444" style={{ flexShrink: 0, marginRight: '0.5rem' }} />
-              <input
-                type="text"
-                placeholder="Enter your location"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                style={{
-                  border: 'none',
-                  boxShadow: 'none',
-                  padding: '0.6rem 0',
-                  fontSize: '0.95rem',
-                  width: '100%'
-                }}
-              />
-              <button
-                type="button"
-                onClick={handleDetectGpsForDiscover}
-                disabled={detectingGps}
-                style={{
-                  background: '#f1f5f9',
-                  border: '1px solid #cbd5e1',
-                  borderRadius: 'var(--radius-full)',
-                  cursor: 'pointer',
-                  padding: '0.35rem 0.65rem',
-                  color: 'var(--primary)',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.3rem',
-                  flexShrink: 0
-                }}
-                title="Detect current location using browser geolocation"
-              >
-                <Navigation size={13} className={detectingGps ? 'spin' : ''} />
-                <span>{detectingGps ? 'Detecting...' : 'Use Current Location'}</span>
+              <button type="submit" disabled={loading || detectingGps} className="btn btn-primary discover-submit-button">
+                <Search size={17} />
+                <span>{loading ? 'Finding matches...' : 'Find nearby help'}</span>
+                <ArrowRight size={17} />
               </button>
             </div>
-
-            {/* 3. Action Submit Button */}
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn btn-primary"
-              style={{ borderRadius: 'var(--radius-full)', padding: '0.7rem 1.6rem', flexShrink: 0 }}
-            >
-              {loading ? 'Analyzing Problem...' : 'Diagnose Problem'}
-            </button>
+            {searchError && <div className="discover-form-error" role="alert">{searchError}</div>}
           </form>
 
           {/* User Prompt Test Case Examples */}
@@ -363,7 +476,7 @@ export default function Discover() {
                 key={idx}
                 onClick={() => {
                   setQuery(p);
-                  handleProblemAnalysis(p, location);
+                  setSearchError('');
                 }}
                 style={{
                   background: query === p ? 'var(--primary-light)' : '#ffffff',
@@ -377,7 +490,7 @@ export default function Discover() {
                   transition: 'all 0.15s ease'
                 }}
               >
-                "{p}"
+                {p}
               </button>
             ))}
           </div>
@@ -520,6 +633,25 @@ export default function Discover() {
         {/* ======================================================== */}
         {/* BRANCH 2: PROFESSIONAL SERVICE REQUIRED CARD             */}
         {/* ======================================================== */}
+        {!loading && problemAnalysis && problemAnalysis.decision === 'NO_MATCH' && (
+          <div className="card" style={{
+            background: 'linear-gradient(135deg, #fff7ed 0%, #fff 100%)',
+            border: '1px solid #fed7aa',
+            padding: '1.5rem',
+            marginBottom: '2rem',
+            boxShadow: 'var(--shadow-md)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.5rem' }}>
+              <AlertTriangle size={20} color="#c2410c" />
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#9a4d11', textTransform: 'uppercase' }}>No Relevant Marketplace Match</span>
+            </div>
+            <h3 style={{ fontSize: '1.4rem', marginBottom: '0.5rem', color: '#7c2d12' }}>No suitable provider category matched this request</h3>
+            <p style={{ fontSize: '1rem', color: '#7c2d12', marginBottom: 0 }}>
+              {problemAnalysis.message || 'Please describe the problem with a supported service or a more specific issue.'}
+            </p>
+          </div>
+        )}
+
         {!loading && problemAnalysis && problemAnalysis.decision === 'PROFESSIONAL_SERVICE' && (
           <div className="card" style={{
             background: 'linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%)',
@@ -616,7 +748,7 @@ export default function Discover() {
         {/* RECOMMENDED PROVIDERS SECTION                            */}
         {/* ======================================================== */}
         {/* Render providers if professional service, or if user escalated from simple guidance */}
-        {(problemAnalysis?.decision === 'PROFESSIONAL_SERVICE' || showProvidersForSimple || (!problemAnalysis && recommendations.length > 0)) && (
+        {(problemAnalysis?.decision === 'PROFESSIONAL_SERVICE' || showProvidersForSimple) && (
           <div style={{ marginBottom: '3.5rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.5rem' }}>
               <div>
@@ -632,7 +764,9 @@ export default function Discover() {
             {recommendations.length === 0 ? (
               <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
                 <p style={{ color: 'var(--text-muted)' }}>
-                  {problemAnalysis?.location_error || 'No verified specialists for this service were found within 50 km of your selected location.'}
+                  {problemAnalysis?.decision === 'NO_MATCH'
+                    ? (problemAnalysis?.message || 'No suitable provider category matched this request.')
+                    : (problemAnalysis?.location_error || 'No verified specialists for this service were found within 50 km of your selected location.')}
                 </p>
               </div>
             ) : (
@@ -696,7 +830,7 @@ export default function Discover() {
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: 'var(--text-muted)' }}>
                           <MapPin size={14} color="var(--primary)" />
-                          <span>{p.distance_km} km • {p.address}</span>
+                          <span>{p.distance_km != null ? `${p.distance_km} km` : 'Distance unavailable'} • {p.address}</span>
                         </div>
 
                         <div style={{ color: '#059669', fontWeight: 600, fontSize: '0.8rem' }}>

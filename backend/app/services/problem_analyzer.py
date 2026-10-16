@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.category import Category
 from app.models.service import Service
+from app.ml.bge_m3_matcher import BGEM3Matcher
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -264,12 +265,16 @@ class ProblemAnalyzer:
                 "urgency": "urgent"
             }
 
-        # 3. Bathroom Pipe Leaking Badly / Severe Pipe Leak (Professional Service)
-        if any(term in q_lower for term in ["pipe is leaking", "bathroom pipe", "pipe leaking", "pipe burst", "pipe leakage", "water leaking from pipe", "seepage", "drain leak"]):
+        # 3. Sink / Pipe Leak (Professional Service)
+        if any(term in q_lower for term in [
+            "kitchen sink is leaking", "sink is leaking", "sink leaking", "leaking sink", "pipe is leaking",
+            "bathroom pipe", "pipe leaking", "pipe burst", "pipe leakage", "water leaking from pipe", "water leaking from sink",
+            "seepage", "drain leak", "faucet leaking", "faucet leak", "toilet leak", "leaking toilet"
+        ]):
             guidance = (
-                "Bathroom pipe leakage requires professional plumbing assistance to prevent concealed wall seepage, "
-                "tile damage, and structural water damage. Please shut off the main water valve to halt active water flow. "
-                "A verified plumber will inspect the pipe joints, pressure lines, and fittings to seal or replace the damaged section."
+                "A leaking sink, faucet, or pipe requires professional plumbing assistance to prevent concealed wall seepage, "
+                "cabinet damage, and structural water damage. Please shut off the main water valve to halt active water flow. "
+                "A verified plumber will inspect the joints, supply lines, and fittings to seal or replace the damaged section."
             )
             diy_steps = [
                 "Locate and close the main bathroom shutoff valve to stop active water flooding",
@@ -519,33 +524,76 @@ class ProblemAnalyzer:
         if not db:
             return
 
-        cat_name = analysis.get("category", "Home Services")
-        svc_name = analysis.get("service", "AC Repair")
+        if analysis.get("show_providers") is False and analysis.get("intent") == "guidance":
+            return
 
-        service = db.query(Service).filter(Service.name.ilike(f"%{svc_name}%")).first()
-        if not service:
-            service = db.query(Service).filter(Service.slug.ilike(f"%{svc_name.lower().replace(' ', '-')}%")).first()
+        query_text = str(analysis.get("problem") or analysis.get("service") or "").strip()
+        if not query_text:
+            return
 
-        category = db.query(Category).filter(Category.name.ilike(f"%{cat_name}%")).first()
+        services = db.query(Service).filter(Service.is_active == True).all()
+        if not services:
+            return
 
-        if service:
-            analysis["service_id"] = service.id
-            analysis["service"] = service.name
-            if service.category:
-                analysis["category"] = service.category.name
-                analysis["category_id"] = service.category.id
-        else:
-            first_svc = db.query(Service).first()
-            if first_svc:
-                analysis["service_id"] = first_svc.id
-                analysis["service"] = first_svc.name
-                if first_svc.category:
-                    analysis["category"] = first_svc.category.name
-                    analysis["category_id"] = first_svc.category.id
+        ranked = BGEM3Matcher.rank_services(query_text, services)
+        matched_service = None
+        matched_score = 0.0
+        for service, score in ranked:
+            if score >= 0.58:
+                matched_service = service
+                matched_score = score
+                break
+
+        if matched_service:
+            analysis["service_id"] = matched_service.id
+            analysis["service"] = matched_service.name
+            analysis["service_match_score"] = round(matched_score, 3)
+            if matched_service.category:
+                analysis["category"] = matched_service.category.name
+                analysis["category_id"] = matched_service.category.id
+            analysis["show_providers"] = True
+            analysis["needs_professional"] = True
+            analysis["intent"] = "service_required"
+            analysis["decision"] = "PROFESSIONAL_SERVICE"
+            analysis["classification"] = "PROFESSIONAL_SERVICE"
+            return
+
+        analysis["service_id"] = None
+        analysis["service"] = None
+        analysis["category"] = None
+        analysis["category_id"] = None
+        analysis["service_match_score"] = 0.0
+        analysis["show_providers"] = False
+        analysis["needs_professional"] = False
+        analysis["intent"] = "no_match"
+        analysis["decision"] = "NO_MATCH"
+        analysis["classification"] = "NO_MATCH"
+        analysis["message"] = (
+            "No marketplace service matches this problem closely enough. "
+            "Please describe the issue using a supported service category or a more specific fault."
+        )
 
     @classmethod
     def _apply_query_overrides(cls, analysis: Dict[str, Any], q_lower: str):
         """Correct high-confidence safety/service mappings before database enrichment."""
+        leaking_terms = [
+            "leaking sink", "sink is leaking", "kitchen sink is leaking", "water leaking from sink",
+            "leaking pipe", "pipe leaking", "faucet leaking", "tap is leaking", "drain leak",
+            "toilet leak", "toilet is leaking", "sink leak", "pipe is leaking", "water leak"
+        ]
+        if any(term in q_lower for term in leaking_terms):
+            analysis.update({
+                "category": "Home Services",
+                "service": "Plumbing",
+                "show_providers": True,
+                "needs_professional": True,
+                "intent": "service_required",
+                "decision": "PROFESSIONAL_SERVICE",
+                "classification": "PROFESSIONAL_SERVICE",
+                "follow_up_prompt": "Connecting you with verified plumbing specialists near you..."
+            })
+            return
+
         fan_terms = ["fan", "ceiling fan", "table fan", "exhaust fan", "fan regulator"]
         has_fan = any(term in q_lower for term in fan_terms)
         mentions_ac = any(term in q_lower for term in ["ac", "air conditioner", "air conditioning"])

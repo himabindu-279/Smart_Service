@@ -1,13 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import { Bot, Send, User, Sparkles, Star, MapPin, ArrowRight, ShieldCheck, HelpCircle } from 'lucide-react';
 
 export default function AIAssistant() {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      content: 'Hello! I am your SmartService AI Consultant. Describe any issue with your home appliances, healthcare needs, plumbing, tutoring, or vehicle, and I will diagnose the exact marketplace service and connect you with top verified specialists in Bengaluru.',
+      content: 'Hi, I can help identify the right marketplace service, explain what to expect, and find providers near your saved location. What do you need help with?',
       suggested_service: null,
       providers: [],
       actions: []
@@ -15,17 +16,25 @@ export default function AIAssistant() {
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [coordinates, setCoordinates] = useState({ latitude: null, longitude: null });
+  const [serviceLocation, setServiceLocation] = useState(null);
+  const { user } = useAuth();
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => setCoordinates({ latitude: coords.latitude, longitude: coords.longitude }),
-      () => {},
-      { enableHighAccuracy: true, timeout: 8000 }
-    );
-  }, []);
+    let isMounted = true;
+    const loadLocation = async () => {
+      try {
+        const saved = user ? await api.get('/users/me/location') : null;
+        const stored = saved || JSON.parse(localStorage.getItem('serviceLocation') || 'null');
+        if (isMounted && stored) setServiceLocation(stored);
+      } catch {
+        const stored = JSON.parse(localStorage.getItem('serviceLocation') || 'null');
+        if (isMounted && stored) setServiceLocation(stored);
+      }
+    };
+    loadLocation();
+    return () => { isMounted = false; };
+  }, [user?.id]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -48,8 +57,9 @@ export default function AIAssistant() {
       const response = await api.post('/assistant/chat', {
         message: messageText,
         history: messages.slice(-4).map((m) => ({ role: m.role, content: m.content })),
-        latitude: coordinates.latitude,
-        longitude: coordinates.longitude
+        latitude: serviceLocation?.latitude,
+        longitude: serviceLocation?.longitude,
+        location: serviceLocation?.address_line || serviceLocation?.display_name || serviceLocation?.city,
       });
 
       const assistantMessage = {

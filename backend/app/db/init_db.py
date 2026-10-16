@@ -167,7 +167,21 @@ def init_db(db: Session) -> None:
 
     # 1. Seed Super Admin
     admin_user = db.query(User).filter(User.email == settings.FIRST_SUPERUSER_EMAIL).first()
-    if not admin_user:
+    if admin_user:
+        if admin_user.role != UserRole.ADMIN:
+            admin_user.hashed_password = get_password_hash(settings.FIRST_SUPERUSER_PASSWORD)
+        admin_user.role = UserRole.ADMIN
+        admin_user.is_active = True
+        admin_user.full_name = settings.FIRST_SUPERUSER_NAME
+
+        other_admins = db.query(User).filter(
+            User.role == UserRole.ADMIN,
+            User.id != admin_user.id,
+        ).all()
+        for other_admin in other_admins:
+            other_admin.is_active = False
+        db.commit()
+    else:
         logger.info(f"Creating super admin: {settings.FIRST_SUPERUSER_EMAIL}")
         admin_user = User(
             email=settings.FIRST_SUPERUSER_EMAIL,

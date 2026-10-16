@@ -10,6 +10,7 @@ export function AuthProvider({ children }) {
   });
   const [token, setToken] = useState(() => localStorage.getItem('token') || null);
   const [loading, setLoading] = useState(true);
+  const [sessionError, setSessionError] = useState('');
 
   useEffect(() => {
     const validationToken = token;
@@ -18,15 +19,20 @@ export function AuthProvider({ children }) {
         .then((userData) => {
           if (localStorage.getItem('token') !== validationToken) return;
           setUser(userData);
+          setSessionError('');
           localStorage.setItem('user', JSON.stringify(userData));
         })
-        .catch(() => {
+        .catch((error) => {
           // Do not let an older validation request log out a newer session.
           if (localStorage.getItem('token') === validationToken) {
-            localStorage.removeItem('token');
-            localStorage.removeItem('user');
-            setToken(null);
-            setUser(null);
+            if (error.status === 401 || error.status === 403) {
+              localStorage.removeItem('token');
+              localStorage.removeItem('user');
+              setToken(null);
+              setUser(null);
+            } else {
+              setSessionError('Your saved sign-in could not be verified. Check the connection and refresh to retry.');
+            }
           }
         })
         .finally(() => setLoading(false));
@@ -41,6 +47,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem('user', JSON.stringify(data.user));
     setToken(data.access_token);
     setUser(data.user);
+    setSessionError('');
     return data.user;
   };
 
@@ -50,6 +57,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem('user', JSON.stringify(data.user));
     setToken(data.access_token);
     setUser(data.user);
+    setSessionError('');
     return data.user;
   };
 
@@ -58,6 +66,12 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('user');
     setToken(null);
     setUser(null);
+    setSessionError('');
+  };
+
+  const updateUser = (updatedUser) => {
+    setUser(updatedUser);
+    localStorage.setItem('user', JSON.stringify(updatedUser));
   };
 
   const isUser = user?.role === 'USER';
@@ -65,7 +79,7 @@ export function AuthProvider({ children }) {
   const isAdmin = user?.role === 'ADMIN';
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout, isUser, isProvider, isAdmin }}>
+    <AuthContext.Provider value={{ user, token, loading, sessionError, login, register, logout, updateUser, isUser, isProvider, isAdmin }}>
       {children}
     </AuthContext.Provider>
   );
