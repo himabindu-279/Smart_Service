@@ -18,6 +18,11 @@ ENV/
 .env
 *.env.local
 
+# Local SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
 # Testing & Coverage
 .pytest_cache/
 */.pytest_cache/
