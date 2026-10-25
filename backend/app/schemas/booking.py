@@ -8,9 +8,9 @@ from app.models.enums import BookingStatus
 class BookingBase(BaseModel):
     provider_id: int
     service_id: int
-    customer_full_name: str = Field(min_length=2, max_length=255)
-    customer_mobile: str = Field(min_length=8, max_length=20)
-    customer_email: EmailStr
+    customer_full_name: Optional[str] = Field(default=None, max_length=255)
+    customer_mobile: Optional[str] = Field(default=None, max_length=20)
+    customer_email: Optional[EmailStr] = None
     booking_date: date
     booking_time: time
     service_address: str = Field(min_length=5, max_length=500)
@@ -24,7 +24,9 @@ class BookingBase(BaseModel):
 
     @field_validator("customer_full_name")
     @classmethod
-    def validate_customer_name(cls, value: str) -> str:
+    def validate_customer_name(cls, value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
         normalized = " ".join(value.split())
         if len(normalized) < 2:
             raise ValueError("Enter the customer's full name")
@@ -32,7 +34,9 @@ class BookingBase(BaseModel):
 
     @field_validator("customer_mobile")
     @classmethod
-    def validate_customer_mobile(cls, value: str) -> str:
+    def validate_customer_mobile(cls, value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
         value = value.strip()
         digits = re.sub(r"\D", "", value)
         if not 8 <= len(digits) <= 15 or not re.fullmatch(r"\+?[0-9().\s-]+", value):

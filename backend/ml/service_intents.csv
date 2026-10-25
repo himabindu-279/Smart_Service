@@ -1,0 +1,79 @@
+text,label
+I need plumbing,plumbing
+My kitchen tap is leaking,plumbing
+There is a pipe leak in my bathroom,plumbing
+The air conditioner is not cooling,ac-repair
+My AC is making a strange noise,ac-repair
+Please repair my split AC,ac-repair
+I want regular AC servicing,ac-maintenance
+Clean and inspect my air conditioner,ac-maintenance
+My AC needs preventive maintenance,ac-maintenance
+I need a new AC installed,ac-installation
+Install a split air conditioner,ac-installation
+Please fit an AC in my bedroom,ac-installation
+My switchboard is sparking,electrical
+I need an electrician for broken wiring,electrical
+The ceiling fan wiring needs repair,electrical
+I need someone to deep clean my house,cleaning
+Please clean my sofa and carpet,cleaning
+Book a home cleaning service,cleaning
+There are cockroaches in my kitchen,pest-control
+I need termite treatment,pest-control
+Please remove pests from my home,pest-control
+I need a doctor consultation,doctor-consultation
+I have fever and need a physician,doctor-consultation
+Book a general medical consultation,doctor-consultation
+I need a nurse at home,nurse-at-home
+Arrange post surgery patient care,nurse-at-home
+An elderly person needs home nursing,nurse-at-home
+I need physiotherapy at home,physiotherapy
+Help with rehabilitation exercises,physiotherapy
+I have back pain and need a physiotherapist,physiotherapy
+I need a blood test at home,lab-services
+Book doorstep diagnostic lab services,lab-services
+I need a health checkup and lab report,lab-services
+I need catering for a party,catering
+Arrange food for a wedding event,catering
+I need a buffet for a large gathering,catering
+I want homemade food delivered,home-food
+Find daily tiffin or meal service,home-food
+I need home cooked lunch,home-food
+I need a birthday cake,baker
+Find a bakery for custom pastries,baker
+I want a custom anniversary cake,baker
+I need weekly meal boxes,meal-services
+Find a monthly meal subscription,meal-services
+Arrange nutritious meal delivery,meal-services
+I need a tutor,tutors
+Find a school subject teacher,tutors
+I need private tuition for my child,tutors
+I want to learn Python programming,programming
+Find a coding teacher,programming
+I need help with JavaScript,programming
+I need a maths tutor,mathematics
+Help with algebra and calculus,mathematics
+Find mathematics exam coaching,mathematics
+I want spoken English lessons,english
+Find an IELTS English teacher,english
+I need help with English grammar,english
+My car brakes are making noise,car-repair
+I need a car mechanic,car-repair
+Repair my car engine,car-repair
+My motorcycle chain needs repair,bike-repair
+Find a scooter mechanic,bike-repair
+I need two wheeler servicing,bike-repair
+I need vehicle servicing,servicing
+Book periodic car maintenance,servicing
+Find a vehicle service center,servicing
+I need biriyani for an event,biriyani
+Order biriyani for my family,biriyani
+Find a biriyani food service,biriyani
+Hello,greeting
+Hi there,greeting
+Good morning,greeting
+What services do you provide?,general_service_query
+Show me the available marketplace services,general_service_query
+How does this service marketplace work?,general_service_query
+I am not sure what service I need,other_or_unclear
+Can someone help with this problem,other_or_unclear
+Please help me find the right option,other_or_unclear

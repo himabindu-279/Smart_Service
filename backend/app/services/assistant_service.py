@@ -33,12 +33,17 @@ class AssistantService:
         4. Return response with verified actionable marketplace suggestions
         """
         q = message.strip()
+        llm_called = False
+        llm_status = "not_attempted"
+        llm_error = None
         if not q:
             return {
                 "response": "Tell me what is happening or what kind of service you need, and I’ll help find the right next step.",
                 "suggested_service": None,
                 "providers": [],
                 "actions": [],
+                "llm_called": False,
+                "llm_status": "not_needed",
             }
 
         history = [
@@ -62,15 +67,16 @@ class AssistantService:
             top_service = None
 
         if top_service is None and history:
-            previous_user_message = next(
-                (item["content"] for item in reversed(history) if item["role"] == "user"),
-                "",
-            )
-            contextual_ranking = BGEM3Matcher.rank_services(previous_user_message, services)
-            contextual_service, contextual_confidence = contextual_ranking[0] if contextual_ranking else (None, 0.0)
-            if contextual_confidence >= 0.48:
-                top_service = contextual_service
-                confidence = contextual_confidence
+            for item in reversed(history):
+                if item["role"] != "user":
+                    continue
+                contextual_ranking = BGEM3Matcher.rank_services(item["content"], services)
+                contextual_service, contextual_confidence = contextual_ranking[0] if contextual_ranking else (None, 0.0)
+                if contextual_confidence >= 0.48:
+                    top_service = contextual_service
+                    confidence = contextual_confidence
+                    logger.info("Resolved follow-up '%s' from service context '%s'", q, item["content"])
+                    break
 
         if top_service is None:
             return {
@@ -81,6 +87,8 @@ class AssistantService:
                 "suggested_service": None,
                 "providers": [],
                 "actions": [{"label": "Browse services", "type": "NAVIGATE", "path": "/services"}],
+                "llm_called": False,
+                "llm_status": "not_needed",
             }
 
         # Step 2: Retrieve approved offers from active, available users.
@@ -131,6 +139,8 @@ class AssistantService:
         # Step 3: LLM generation or contextual synthesis from verified facts.
         llm_response = None
         if settings.LLM_API_KEY:
+            llm_called = True
+            llm_status = "requesting"
             try:
                 base_url = settings.LLM_BASE_URL or "https://api.openai.com/v1"
                 headers = {
@@ -174,7 +184,7 @@ class AssistantService:
                         messages.append({"role": h.get("role", "user"), "content": h.get("content", "")})
                 messages.append({"role": "user", "content": message})
 
-                async with httpx.AsyncClient(timeout=15.0) as client:
+                async with httpx.AsyncClient(timeout=3.5) as client:
                     if settings.LLM_PROVIDER.lower() == "gemini":
                         gemini_url = (
                             f"{base_url.rstrip('/')}/models/{settings.LLM_MODEL}:generateContent"
@@ -199,7 +209,10 @@ class AssistantService:
                         if resp.status_code == 200:
                             data = resp.json()
                             llm_response = data["candidates"][0]["content"]["parts"][0]["text"]
+                            llm_status = "success"
                         else:
+                            llm_status = "provider_error"
+                            llm_error = f"HTTP {resp.status_code}"
                             logger.warning(
                                 "Gemini assistant returned HTTP %s: %s",
                                 resp.status_code,
@@ -218,14 +231,22 @@ class AssistantService:
                         if resp.status_code == 200:
                             data = resp.json()
                             llm_response = data["choices"][0]["message"]["content"]
+                            llm_status = "success"
                         else:
+                            llm_status = "provider_error"
+                            llm_error = f"HTTP {resp.status_code}"
                             logger.warning(
                                 "LLM assistant returned HTTP %s: %s",
                                 resp.status_code,
                                 resp.text[:250],
                             )
             except Exception as e:
-                logger.warning(f"External LLM call failed ({e}), using intelligent contextual synthesis.")
+                llm_status = "timeout" if isinstance(e, httpx.TimeoutException) else "error"
+                llm_error = type(e).__name__
+                logger.warning("External LLM call failed (%s: %s); using grounded catalog synthesis.", type(e).__name__, str(e)[:180])
+        else:
+            llm_status = "not_configured"
+            logger.info("LLM response skipped because no API key is configured; using grounded catalog synthesis.")
 
         if not llm_response:
             category_name = top_service.category.name if top_service.category else "Services"
@@ -285,4 +306,7 @@ class AssistantService:
             "suggested_service": suggested_service,
             "providers": relevant_providers[:3],
             "actions": actions,
+            "llm_called": llm_called,
+            "llm_status": llm_status,
+            "llm_error": llm_error,
         }

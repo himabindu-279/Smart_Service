@@ -16,6 +16,7 @@ from app.ml.hgt_matcher import HGTMatcher
 from app.ml.cross_encoder_ranker import CrossEncoderRanker
 from app.ml.deberta_sentiment import DeBERTaSentimentAnalyzer
 from app.ml.recommendation_engine import RecommendationEngine
+from app.ml.service_intent_classifier import predict_service_slug
 
 __all__ = [
     "BGEM3Matcher",
@@ -23,5 +24,6 @@ __all__ = [
     "HGTMatcher",
     "CrossEncoderRanker",
     "DeBERTaSentimentAnalyzer",
-    "RecommendationEngine"
+    "RecommendationEngine",
+    "predict_service_slug"
 ]

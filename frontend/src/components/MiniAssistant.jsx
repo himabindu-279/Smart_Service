@@ -7,6 +7,7 @@ export default function MiniAssistant() {
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [conversationId, setConversationId] = useState(null);
   const [messages, setMessages] = useState([
     { role: 'assistant', content: 'Hi! What service can I help you find?' },
   ]);
@@ -29,6 +30,21 @@ export default function MiniAssistant() {
   }, []);
 
   useEffect(() => {
+    let mounted = true;
+    if (!localStorage.getItem('token')) return undefined;
+    api.get('/chat/conversations').then(async (conversations) => {
+      if (!mounted || !conversations.length) return;
+      const latest = conversations[0];
+      const savedMessages = await api.get(`/chat/conversations/${latest.id}/messages`);
+      if (mounted) {
+        setConversationId(latest.id);
+        if (savedMessages.length) setMessages(savedMessages);
+      }
+    }).catch(() => undefined);
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
     if (isOpen) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [isOpen, messages, loading]);
 
@@ -37,27 +53,29 @@ export default function MiniAssistant() {
     const message = input.trim();
     if (!message || loading) return;
 
-    const history = messages.slice(-6).map(({ role, content }) => ({ role, content }));
     setMessages((current) => [...current, { role: 'user', content: message }]);
     setInput('');
     setLoading(true);
 
     try {
-      const response = await api.post('/assistant/chat', {
+      let activeConversationId = conversationId;
+      if (!activeConversationId) {
+        const conversation = await api.post('/chat/conversations', {});
+        activeConversationId = conversation.id;
+        setConversationId(activeConversationId);
+      }
+      const response = await api.post(`/chat/conversations/${activeConversationId}/messages`, {
         message,
-        history,
+        client_message_id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
         latitude: serviceLocation?.latitude,
         longitude: serviceLocation?.longitude,
         location: serviceLocation?.address_line || serviceLocation?.display_name || serviceLocation?.city,
       });
+      setMessages((current) => [...current, response.assistant_message]);
+    } catch (error) {
       setMessages((current) => [...current, {
         role: 'assistant',
-        content: response.response || 'I could not find an answer just now. Please try again.',
-      }]);
-    } catch {
-      setMessages((current) => [...current, {
-        role: 'assistant',
-        content: 'I could not reach the assistant. Please try again in a moment.',
+        content: error.message || 'I could not reach the assistant. Please try again in a moment.',
       }]);
     } finally {
       setLoading(false);

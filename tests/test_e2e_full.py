@@ -3,6 +3,7 @@ import urllib.error
 import json
 import uuid
 import sys
+from datetime import date, timedelta
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -131,7 +132,10 @@ def test_full_marketplace():
     booking_res = make_req("/bookings", "POST", {
         "provider_id": top_p["provider_id"],
         "service_id": target_service_id,
-        "booking_date": "2026-09-30",
+        "customer_full_name": "Test Customer",
+        "customer_mobile": "+91-9988112233",
+        "customer_email": unique_cust_email,
+        "booking_date": (date.today() + timedelta(days=10)).isoformat(),
         "booking_time": "14:00",
         "service_address": "15th Main, Sector 3, HSR Layout, Bengaluru",
         "special_instructions": "AC cooling coil inspection required."

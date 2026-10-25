@@ -30,10 +30,11 @@ export default function Login() {
   };
 
   return (
-    <div className="container" style={{ padding: '4rem 1.5rem 6rem', maxWidth: '480px' }}>
-      <div className="card" style={{ padding: '2.5rem' }}>
+    <div className="auth-page">
+      <div className="auth-card">
+        <Link to="/" className="auth-back-link">← SmartServiceAI</Link>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div style={{
+          <div className="auth-mark" style={{
             background: 'var(--primary-light)',
             color: 'var(--primary)',
             width: '48px',

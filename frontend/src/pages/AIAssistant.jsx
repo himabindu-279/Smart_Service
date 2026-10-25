@@ -1,379 +1,154 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { Bot, Send, User, Sparkles, Star, MapPin, ArrowRight, ShieldCheck, HelpCircle } from 'lucide-react';
+import { ArrowRight, Bot, Edit3, Menu, MessageSquare, MoreVertical, Plus, Send, ShieldCheck, Sparkles, Trash2, User, X } from 'lucide-react';
+
+const welcomeMessage = { role: 'assistant', content: 'Hi, I can help identify the right marketplace service, explain what to expect, and find providers near your saved location.', suggested_service: null, providers: [], actions: [] };
+
+function formatTime(value) {
+  if (!value) return '';
+  return new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
 
 export default function AIAssistant() {
-  const [messages, setMessages] = useState([
-    {
-      role: 'assistant',
-      content: 'Hi, I can help identify the right marketplace service, explain what to expect, and find providers near your saved location. What do you need help with?',
-      suggested_service: null,
-      providers: [],
-      actions: []
-    }
-  ]);
+  const { user, logout } = useAuth();
+  const [conversations, setConversations] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [retryPayload, setRetryPayload] = useState(null);
   const [serviceLocation, setServiceLocation] = useState(null);
-  const { user } = useAuth();
+  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
-    let isMounted = true;
-    const loadLocation = async () => {
-      try {
-        const saved = user ? await api.get('/users/me/location') : null;
-        const stored = saved || JSON.parse(localStorage.getItem('serviceLocation') || 'null');
-        if (isMounted && stored) setServiceLocation(stored);
-      } catch {
-        const stored = JSON.parse(localStorage.getItem('serviceLocation') || 'null');
-        if (isMounted && stored) setServiceLocation(stored);
-      }
-    };
-    loadLocation();
-    return () => { isMounted = false; };
+    let mounted = true;
+    Promise.all([
+      api.get('/chat/conversations'),
+      user ? api.get('/users/me/location').catch(() => null) : Promise.resolve(null),
+    ]).then(([items, location]) => {
+      if (!mounted) return;
+      setConversations(items);
+      setServiceLocation(location || JSON.parse(localStorage.getItem('serviceLocation') || 'null'));
+      if (items.length) setActiveId(items[0].id);
+    }).catch(() => mounted && setError('Unable to load your chat history. Please try again.'))
+      .finally(() => mounted && setPageLoading(false));
+    return () => { mounted = false; };
   }, [user?.id]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  useEffect(() => {
+    if (!activeId) { setMessages([]); return undefined; }
+    let mounted = true;
+    setMessages([]);
+    api.get(`/chat/conversations/${activeId}/messages`).then((items) => {
+      if (mounted) setMessages(items.length ? items : [welcomeMessage]);
+    }).catch(() => mounted && setError('Unable to load this conversation.'));
+    return () => { mounted = false; };
+  }, [activeId]);
+
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
+
+  const createConversation = async () => {
+    try {
+      const conversation = await api.post('/chat/conversations', {});
+      setConversations((prev) => [conversation, ...prev]);
+      setActiveId(conversation.id);
+      setMessages([welcomeMessage]);
+      setMobileHistoryOpen(false);
+      setError('');
+    } catch { setError('Unable to start a new conversation.'); }
   };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, loading]);
+  const selectConversation = (id) => { setActiveId(id); setMobileHistoryOpen(false); setError(''); };
 
-  const handleSend = async (textToSend) => {
-    const messageText = textToSend || input;
-    if (!messageText.trim() || loading) return;
-
-    const userMessage = { role: 'user', content: messageText };
-    setMessages((prev) => [...prev, userMessage]);
-    if (!textToSend) setInput('');
-    setLoading(true);
-
+  const renameConversation = async (conversation) => {
+    const title = window.prompt('Rename conversation', conversation.title);
+    if (!title || title.trim() === conversation.title) return;
     try {
-      const response = await api.post('/assistant/chat', {
+      const updated = await api.patch(`/chat/conversations/${conversation.id}`, { title: title.trim() });
+      setConversations((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+    } catch { setError('Unable to rename this conversation.'); }
+  };
+
+  const deleteConversation = async (conversation) => {
+    if (!window.confirm(`Delete "${conversation.title}"?`)) return;
+    try {
+      await api.delete(`/chat/conversations/${conversation.id}`);
+      const remaining = conversations.filter((item) => item.id !== conversation.id);
+      setConversations(remaining);
+      if (activeId === conversation.id) {
+        setActiveId(remaining[0]?.id || null);
+        setMessages(remaining.length ? [] : [welcomeMessage]);
+      }
+    } catch { setError('Unable to delete this conversation.'); }
+  };
+
+  const handleSend = async (textToSend, retryId = null) => {
+    const messageText = (textToSend || input).trim();
+    if (!messageText || loading) return;
+    const clientMessageId = retryId || (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+    setInput('');
+    setError('');
+    setRetryPayload(null);
+    setLoading(true);
+    try {
+      let conversationId = activeId;
+      if (!conversationId) {
+        const conversation = await api.post('/chat/conversations', {});
+        conversationId = conversation.id;
+        setActiveId(conversationId);
+        setConversations((prev) => [conversation, ...prev]);
+      }
+      const result = await api.post(`/chat/conversations/${conversationId}/messages`, {
         message: messageText,
-        history: messages.slice(-4).map((m) => ({ role: m.role, content: m.content })),
+        client_message_id: clientMessageId,
         latitude: serviceLocation?.latitude,
         longitude: serviceLocation?.longitude,
         location: serviceLocation?.address_line || serviceLocation?.display_name || serviceLocation?.city,
       });
-
-      const assistantMessage = {
-        role: 'assistant',
-        content: response.response,
-        suggested_service: response.suggested_service,
-        providers: response.providers || [],
-        actions: response.actions || []
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
+      setMessages((prev) => [...prev.filter((message) => message !== welcomeMessage && message.client_message_id !== clientMessageId), result.user_message, result.assistant_message]);
+      setConversations((prev) => prev.map((conversation) => conversation.id === conversationId
+        ? { ...conversation, title: conversation.title === 'New chat' ? messageText.slice(0, 120) : conversation.title, updated_at: result.user_message.created_at, message_count: (conversation.message_count || 0) + 2 }
+        : conversation).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at)));
     } catch (err) {
-      console.error('Chat error:', err);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: 'I experienced an issue processing your request. Please ensure the backend server is reachable, or try rephrasing your service requirement.'
-        }
-      ]);
-    } finally {
-      setLoading(false);
+      setMessages((prev) => [...prev.filter((message) => message.client_message_id !== clientMessageId), { role: 'user', content: messageText, client_message_id: clientMessageId }]);
+      setRetryPayload({ message: messageText, clientMessageId });
+      setError(err.message || 'Your message could not be completed. Please retry.');
     }
+    finally { setLoading(false); }
   };
 
-  const sampleQueries = [
-    "My AC is making strange noise and not cooling",
-    "Kitchen sink pipe is leaking water under cabinet",
-    "Switch board is sparking when I turn on the geyser",
-    "Elderly family member needs post-surgery home nursing",
-    "Car engine makes a grinding noise during braking"
-  ];
+  const activeConversation = conversations.find((conversation) => conversation.id === activeId);
 
   return (
-    <div className="container" style={{ padding: '2rem 1.5rem 4rem', maxWidth: '950px' }}>
-      {/* Title */}
-      <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-        <div style={{
-          background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
-          color: '#fff',
-          width: '42px',
-          height: '42px',
-          borderRadius: '12px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: '0 4px 10px rgba(37,99,235,0.3)'
-        }}>
-          <Bot size={22} />
+    <div className="assistant-shell">
+      <aside className={`assistant-history ${mobileHistoryOpen ? 'assistant-history-open' : ''}`}>
+        <div className="assistant-history-header"><div className="assistant-brand"><span className="assistant-brand-mark"><Bot size={19} /></span><strong>Service guide</strong></div><button className="assistant-icon-button mobile-only" onClick={() => setMobileHistoryOpen(false)} aria-label="Close chat history"><X size={18} /></button></div>
+        <button className="assistant-new-chat" onClick={createConversation}><Plus size={17} /> New chat</button>
+        <div className="assistant-history-label">Your conversations</div>
+        <div className="assistant-conversation-list">
+          {conversations.map((conversation) => <div className={`assistant-conversation ${conversation.id === activeId ? 'active' : ''}`} key={conversation.id}><button onClick={() => selectConversation(conversation.id)}><MessageSquare size={16} /><span>{conversation.title}</span></button><div className="assistant-conversation-actions"><button onClick={() => renameConversation(conversation)} aria-label="Rename conversation"><Edit3 size={14} /></button><button onClick={() => deleteConversation(conversation)} aria-label="Delete conversation"><Trash2 size={14} /></button></div></div>)}
+          {!conversations.length && !pageLoading && <p className="assistant-empty-history">Your saved chats will appear here.</p>}
         </div>
-        <div>
-          <h1 style={{ fontSize: '1.65rem', marginBottom: '0.15rem' }}>SmartService AI Consultant</h1>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-            Conversational diagnostic engine connected to real marketplace services and nearby specialists.
-          </p>
-        </div>
-      </div>
+        <div className="assistant-account"><div className="assistant-account-avatar"><User size={17} /></div><div><strong>{user?.full_name || 'Account'}</strong><span>{user?.email}</span></div><button onClick={logout} aria-label="Log out" title="Log out"><MoreVertical size={17} /></button></div>
+      </aside>
 
-      {/* Chat Window */}
-      <div className="card" style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '680px',
-        padding: 0,
-        overflow: 'hidden'
-      }}>
-        {/* Messages Feed */}
-        <div style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '1.75rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '1.5rem'
-        }}>
-          {messages.map((m, idx) => (
-            <div
-              key={idx}
-              style={{
-                display: 'flex',
-                gap: '1rem',
-                alignItems: 'flex-start',
-                alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                maxWidth: m.role === 'user' ? '80%' : '90%'
-              }}
-            >
-              {m.role === 'assistant' && (
-                <div style={{
-                  width: '36px',
-                  height: '36px',
-                  borderRadius: '10px',
-                  background: 'var(--primary-light)',
-                  color: 'var(--primary)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0
-                }}>
-                  <Bot size={18} />
-                </div>
-              )}
-
-              <div style={{
-                background: m.role === 'user' ? 'var(--primary)' : '#f8fafc',
-                color: m.role === 'user' ? '#ffffff' : 'var(--text-main)',
-                padding: '1.1rem 1.35rem',
-                borderRadius: 'var(--radius-lg)',
-                border: m.role === 'user' ? 'none' : '1px solid var(--border)',
-                boxShadow: 'var(--shadow-sm)',
-                lineHeight: 1.6,
-                fontSize: '0.925rem'
-              }}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>
-                  {m.content}
-                </div>
-
-                {/* Grounded Service Badge */}
-                {m.suggested_service && (
-                  <div style={{
-                    marginTop: '1rem',
-                    padding: '0.75rem 1rem',
-                    background: '#ffffff',
-                    borderRadius: 'var(--radius-md)',
-                    border: '1px solid #bfdbfe',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
-                  }}>
-                    <div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 700, textTransform: 'uppercase' }}>
-                        Matched Marketplace Service
-                      </div>
-                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--secondary)' }}>
-                        {m.suggested_service.name}
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 500, marginLeft: '0.4rem' }}>
-                          ({m.suggested_service.category})
-                        </span>
-                      </div>
-                    </div>
-                    <div style={{ fontWeight: 800, color: 'var(--secondary)' }}>
-                      ₹{m.suggested_service.base_price}
-                    </div>
-                  </div>
-                )}
-
-                {/* Suggested Real Providers from DB */}
-                {m.providers && m.providers.length > 0 && (
-                  <div style={{ marginTop: '1rem' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', marginBottom: '0.5rem' }}>
-                      Recommended Verified Specialists:
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                      {m.providers.map((p) => (
-                        <div key={p.id} style={{
-                          background: '#ffffff',
-                          padding: '0.75rem 1rem',
-                          borderRadius: 'var(--radius-md)',
-                          border: '1px solid var(--border)',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center'
-                        }}>
-                          <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                              <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>{p.business_name}</span>
-                              {p.is_verified && <ShieldCheck size={14} color="var(--primary)" />}
-                            </div>
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                              ⭐ {p.rating} ({p.total_ratings}) • {p.distance_km} km away • ₹{p.price}
-                            </div>
-                          </div>
-                          <Link
-                            to={`/providers/${p.id}?book=true`}
-                            className="btn btn-primary btn-sm"
-                            style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem' }}
-                          >
-                            Book Now
-                          </Link>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Action Suggestions */}
-                {m.actions && m.actions.length > 0 && (
-                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
-                    {m.actions.map((act, aIdx) => (
-                      <Link
-                        key={aIdx}
-                        to={act.path}
-                        className="btn btn-secondary btn-sm"
-                        style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
-                      >
-                        <span>{act.label}</span>
-                        <ArrowRight size={13} />
-                      </Link>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {m.role === 'user' && (
-                <div style={{
-                  width: '36px',
-                  height: '36px',
-                  borderRadius: '10px',
-                  background: 'var(--secondary)',
-                  color: '#fff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0
-                }}>
-                  <User size={18} />
-                </div>
-              )}
-            </div>
-          ))}
-
-          {loading && (
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-              <div style={{
-                width: '36px',
-                height: '36px',
-                borderRadius: '10px',
-                background: 'var(--primary-light)',
-                color: 'var(--primary)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}>
-                <Sparkles size={18} className="animate-spin" />
-              </div>
-              <div style={{
-                background: '#f8fafc',
-                padding: '0.75rem 1.25rem',
-                borderRadius: 'var(--radius-lg)',
-                border: '1px solid var(--border)',
-                fontSize: '0.875rem',
-                color: 'var(--text-muted)'
-              }}>
-                Searching marketplace knowledge graph and diagnosing service need...
-              </div>
-            </div>
-          )}
-
+      <main className="assistant-main">
+        <header className="assistant-topbar"><button className="assistant-icon-button mobile-only" onClick={() => setMobileHistoryOpen(true)} aria-label="Open chat history"><Menu size={20} /></button><div><h1>{activeConversation?.title || 'New conversation'}</h1><span>Grounded in the live marketplace catalog</span></div><Sparkles size={19} color="var(--primary)" /></header>
+        <section className="assistant-messages" aria-live="polite">
+          {pageLoading && <div className="assistant-status">Loading your conversations...</div>}
+          {!pageLoading && !messages.length && <div className="assistant-welcome"><Bot size={32} /><h2>What can we solve today?</h2><p>Describe a service need and I will search the real marketplace catalog for relevant options.</p></div>}
+          {messages.map((message, index) => <div className={`assistant-message-row ${message.role}`} key={message.id || `${message.role}-${index}`}><div className="assistant-message-avatar">{message.role === 'assistant' ? <Bot size={16} /> : <User size={16} />}</div><div className="assistant-message-content"><div className="assistant-message-meta"><strong>{message.role === 'assistant' ? 'Service guide' : 'You'}</strong><span>{formatTime(message.created_at)}</span></div><div className="assistant-message-text">{message.content}</div>{message.suggested_service && <div className="assistant-service-result"><strong>{message.suggested_service.name}</strong><span>{message.suggested_service.category} · from ₹{message.suggested_service.base_price}</span></div>}{message.providers?.length > 0 && <div className="assistant-provider-list">{message.providers.map((provider) => <div className="assistant-provider" key={provider.id}><div><strong>{provider.business_name}</strong>{provider.is_verified && <ShieldCheck size={14} color="var(--primary)" />}<span>★ {provider.rating || 'New'} · ₹{provider.price || 'Quote'}</span></div><Link to={`/providers/${provider.id}?book=true`} className="btn btn-primary btn-sm">Book <ArrowRight size={13} /></Link></div>)}</div>}{message.actions?.length > 0 && <div className="assistant-actions">{message.actions.map((action) => <Link key={action.path} to={action.path} className="btn btn-secondary btn-sm">{action.label} <ArrowRight size={13} /></Link>)}</div>}</div></div>)}
+          {loading && <div className="assistant-typing"><Sparkles size={16} className="animate-spin" /> Searching verified marketplace options...</div>}
+          {error && <div className="assistant-error">{error} <button className="btn btn-secondary btn-sm" onClick={() => retryPayload && handleSend(retryPayload.message, retryPayload.clientMessageId)} disabled={loading}>Retry</button></div>}
           <div ref={messagesEndRef} />
-        </div>
-
-        {/* Quick Query Pills */}
-        <div style={{
-          padding: '0.6rem 1.25rem',
-          borderTop: '1px solid var(--border)',
-          background: 'var(--bg-main)',
-          display: 'flex',
-          gap: '0.5rem',
-          overflowX: 'auto',
-          whiteSpace: 'nowrap'
-        }}>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', alignSelf: 'center', fontWeight: 600 }}>Quick:</span>
-          {sampleQueries.map((sq, idx) => (
-            <button
-              key={idx}
-              onClick={() => handleSend(sq)}
-              disabled={loading}
-              style={{
-                background: '#ffffff',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-full)',
-                padding: '0.25rem 0.75rem',
-                fontSize: '0.75rem',
-                color: 'var(--text-muted)',
-                cursor: 'pointer'
-              }}
-            >
-              {sq}
-            </button>
-          ))}
-        </div>
-
-        {/* Input Bar */}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSend();
-          }}
-          style={{
-            padding: '1rem 1.25rem',
-            borderTop: '1px solid var(--border)',
-            display: 'flex',
-            gap: '0.75rem',
-            background: '#ffffff'
-          }}
-        >
-          <input
-            type="text"
-            placeholder="Type your service inquiry, symptoms or question..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            disabled={loading}
-            style={{ flex: 1 }}
-          />
-          <button
-            type="submit"
-            disabled={loading || !input.trim()}
-            className="btn btn-primary"
-            style={{ padding: '0.65rem 1.25rem', flexShrink: 0 }}
-          >
-            <Send size={16} />
-            <span>Send</span>
-          </button>
-        </form>
-      </div>
+        </section>
+        <div className="assistant-composer-wrap"><div className="assistant-composer-hint">Ask about repairs, care, food, education, or vehicle services</div><form className="assistant-composer" onSubmit={(event) => { event.preventDefault(); handleSend(); }}><input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Message the service guide..." disabled={loading} /><button className="btn btn-primary" disabled={loading || !input.trim()} aria-label="Send message"><Send size={17} /></button></form></div>
+      </main>
     </div>
   );
 }

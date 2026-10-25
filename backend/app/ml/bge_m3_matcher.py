@@ -17,7 +17,7 @@ class BGEM3Matcher:
             "dense_weight": 0.95
         },
         "plumbing": {
-            "keywords": ["pipe", "leak", "tap", "drain", "water", "sink", "faucet", "clog", "sewage", "basin", "flush", "shower", "plumber", "valves", "p-trap"],
+            "keywords": ["plumb", "plumbing", "plumber", "plumbers", "pipe", "leak", "tap", "drain", "water", "sink", "faucet", "clog", "sewage", "basin", "flush", "shower", "valves", "p-trap"],
             "category": "Home Services",
             "dense_weight": 0.95
         },
@@ -108,6 +108,26 @@ class BGEM3Matcher:
         }
     }
 
+    SERVICE_ALIASES = {
+        "plumbing": ["plumbing", "plumber", "plumbers", "plumbing repair", "pipe repair", "tap repair", "faucet repair"],
+        "mathematics": ["math", "maths", "mathematics", "algebra", "calculus", "geometry"],
+        "tutors": ["tutor", "tutors", "tuition", "teacher", "homework help"],
+        "car-repair": ["car repair", "car mechanic", "automotive repair", "brake repair", "engine repair"],
+        "bike-repair": ["bike repair", "motorcycle repair", "scooter repair", "two wheeler repair"],
+        "ac-repair": ["ac repair", "air conditioner repair", "air conditioning repair", "hvac repair"],
+        "electrical": ["electrician", "electrical repair", "wiring repair", "switchboard repair"],
+        "cleaning": ["home cleaning", "house cleaning", "deep cleaning", "cleaner"],
+    }
+
+    @classmethod
+    def explicit_service_slug(cls, query: str) -> Optional[str]:
+        normalized_query = query.lower().strip()
+        for slug, aliases in cls.SERVICE_ALIASES.items():
+            for alias in sorted(aliases, key=len, reverse=True):
+                if re.search(rf"\b{re.escape(alias)}\b", normalized_query):
+                    return slug
+        return None
+
     @classmethod
     def compute_similarity(cls, query: str, service_name: str, service_description: str = "", service_slug: str = "") -> float:
         """
@@ -168,8 +188,16 @@ class BGEM3Matcher:
         Ranks database Service objects by BGE-M3 semantic similarity to query.
         """
         scored = []
+        explicit_slug = cls.explicit_service_slug(query)
+        try:
+            from app.ml.service_intent_classifier import predict_service_slug
+            trained_slug = predict_service_slug(query)
+        except Exception:
+            trained_slug = None
         for svc in services:
             sim = cls.compute_similarity(query, svc.name, svc.description or "", svc.slug or "")
+            if explicit_slug == (svc.slug or "").lower() or trained_slug == (svc.slug or "").lower():
+                sim = max(sim, 0.82)
             scored.append((svc, sim))
 
         scored.sort(key=lambda x: x[1], reverse=True)

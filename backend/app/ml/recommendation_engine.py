@@ -70,12 +70,14 @@ class RecommendationEngine:
             ranked_svcs = BGEM3Matcher.rank_services(query, all_services)
             if ranked_svcs:
                 best_service, best_score = ranked_svcs[0]
+                logger.info("Recommendation service candidate '%s' (%s) scored %.3f for query '%s'", best_service.name, best_service.slug, best_score, query)
                 if best_score >= 0.58:
                     target_service = best_service
                     service_id = best_service.id
                     bge_similarity = best_score
 
         if not target_service:
+            logger.info("Recommendation rejected service for query '%s'; requested service_id=%s", query, service_id)
             return {
                 "detected_service": None,
                 "service_id": None,
@@ -125,6 +127,7 @@ class RecommendationEngine:
         )
 
         providers = candidate_query.all()
+        logger.info("Found %d approved active provider-service candidates for service_id=%s", len(providers), target_service.id)
         category = target_service.category
 
         scored_results = []
@@ -132,14 +135,17 @@ class RecommendationEngine:
         for p in providers:
             user = db.query(User).filter(User.id == p.user_id).first()
             if not user or not user.is_active:
+                logger.info("Provider %s rejected: missing or inactive user", p.id)
                 continue
 
             dist = None
             if target_lat is not None and target_lon is not None:
                 if p.latitude is None or p.longitude is None:
+                    logger.info("Provider %s rejected: missing coordinates for requested location '%s'", p.id, resolved_location or location)
                     continue
                 dist = haversine_distance(target_lat, target_lon, p.latitude, p.longitude)
                 if effective_radius_km and dist > effective_radius_km:
+                    logger.info("Provider %s rejected: distance %.2f km exceeds radius %.2f km", p.id, dist, effective_radius_km)
                     continue
 
             ps = (
@@ -221,6 +227,8 @@ class RecommendationEngine:
             })
 
         scored_results.sort(key=lambda x: x["match_score"], reverse=True)
+        if not scored_results:
+            logger.info("No providers remained after service/location filters for service_id=%s and location='%s'", target_service.id, resolved_location or location)
 
         return {
             "detected_service": target_service.name if target_service else None,

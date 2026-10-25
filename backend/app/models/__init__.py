@@ -12,6 +12,7 @@ from app.models.review import Review
 from app.models.rating import Rating
 from app.models.recommendation import Recommendation
 from app.models.email_notification import EmailNotification
+from app.models.chat import ChatConversation, ChatMessage
 
 __all__ = [
     "Base",
@@ -31,4 +32,6 @@ __all__ = [
     "Rating",
     "Recommendation",
     "EmailNotification",
+    "ChatConversation",
+    "ChatMessage",
 ]

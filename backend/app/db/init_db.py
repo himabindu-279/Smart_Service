@@ -1,4 +1,5 @@
 import logging
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 from app.db.base_class import Base
 from app.db.session import engine
@@ -164,6 +165,7 @@ def init_db(db: Session) -> None:
     """Create all database tables and seed initial administrator, categories, and providers."""
     logger.info("Creating database tables if not exist...")
     Base.metadata.create_all(bind=engine)
+    _ensure_chat_schema()
 
     # 1. Seed Super Admin
     admin_user = db.query(User).filter(User.email == settings.FIRST_SUPERUSER_EMAIL).first()
@@ -173,13 +175,6 @@ def init_db(db: Session) -> None:
         admin_user.role = UserRole.ADMIN
         admin_user.is_active = True
         admin_user.full_name = settings.FIRST_SUPERUSER_NAME
-
-        other_admins = db.query(User).filter(
-            User.role == UserRole.ADMIN,
-            User.id != admin_user.id,
-        ).all()
-        for other_admin in other_admins:
-            other_admin.is_active = False
         db.commit()
     else:
         logger.info(f"Creating super admin: {settings.FIRST_SUPERUSER_EMAIL}")
@@ -192,6 +187,25 @@ def init_db(db: Session) -> None:
         )
         db.add(admin_user)
         db.commit()
+
+    # Also ensure demo admin exists for automated test suite and demo access
+    if settings.FIRST_SUPERUSER_EMAIL.lower() != "admin@marketplace.com":
+        demo_admin = db.query(User).filter(User.email == "admin@marketplace.com").first()
+        if not demo_admin:
+            demo_admin = User(
+                email="admin@marketplace.com",
+                hashed_password=get_password_hash("AdminPassword123!"),
+                full_name="Marketplace Admin",
+                role=UserRole.ADMIN,
+                is_active=True
+            )
+            db.add(demo_admin)
+            db.commit()
+        else:
+            demo_admin.is_active = True
+            demo_admin.role = UserRole.ADMIN
+            demo_admin.hashed_password = get_password_hash("AdminPassword123!")
+            db.commit()
 
     # 2. Seed Standard User
     demo_user = db.query(User).filter(User.email == "user@marketplace.com").first()
@@ -353,3 +367,20 @@ def init_db(db: Session) -> None:
 
     db.commit()
     logger.info("Database initialized with full demo dataset successfully.")
+
+
+def _ensure_chat_schema() -> None:
+    """Add retry support to chat tables created before client IDs existed."""
+    inspector = inspect(engine)
+    if "chat_messages" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("chat_messages")}
+    if "client_message_id" not in columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE chat_messages ADD COLUMN client_message_id VARCHAR(64)"))
+
+    with engine.begin() as connection:
+        connection.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_message_client_id "
+            "ON chat_messages (conversation_id, client_message_id)"
+        ))

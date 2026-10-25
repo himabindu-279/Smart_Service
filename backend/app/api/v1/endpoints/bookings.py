@@ -77,7 +77,7 @@ def create_booking(
             detail="This provider does not offer the selected service. Please choose another provider."
         )
 
-    if current_user.email.casefold() != str(booking_in.customer_email).casefold():
+    if booking_in.customer_email and current_user.email.casefold() != str(booking_in.customer_email).casefold():
         raise HTTPException(status_code=400, detail="Contact email must match the signed-in account.")
 
     requested_date = booking_in.booking_date.isoformat()
@@ -148,8 +148,10 @@ def create_booking(
         longitude=booking_in.longitude,
         special_instructions=booking_in.special_instructions
     )
-    current_user.full_name = booking_in.customer_full_name
-    current_user.phone = booking_in.customer_mobile
+    if booking_in.customer_full_name:
+        current_user.full_name = booking_in.customer_full_name
+    if booking_in.customer_mobile:
+        current_user.phone = booking_in.customer_mobile
     db.add(booking)
     try:
         db.commit()

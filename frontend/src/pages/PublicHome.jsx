@@ -1,223 +1,69 @@
-import React from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowRight, CheckCircle2, ShieldCheck, Sparkles, UserCheck, MapPin, CalendarCheck } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowRight, ArrowUpRight, Bot, BriefcaseBusiness, CalendarCheck, CheckCircle2, ChevronRight, HeartPulse, Home, MapPin, Search, ShieldCheck, Sparkles, Star, Utensils, Wrench } from 'lucide-react';
+import { api } from '../api/client';
 
-const featureCards = [
-  { icon: ShieldCheck, title: 'Verified specialists', text: 'Only approved providers appear in the marketplace.' },
-  { icon: MapPin, title: 'Local and near you', text: 'Browse services by location and proximity.' },
-  { icon: CalendarCheck, title: 'Simple bookings', text: 'Book trusted assistance without leaving the app.' },
-];
-
-const serviceTiles = [
-  'AC Repair',
-  'Plumbing',
-  'Electrical',
-  'Cleaning',
-  'Doctor Consultation',
-  'Home Food',
-  'Tutors',
-  'Car Repair',
-];
+const categoryIcons = { healthcare: HeartPulse, 'home-services': Home, 'food-services': Utensils, automotive: Wrench };
+const categoryColors = ['blue', 'mint', 'amber', 'coral', 'indigo', 'teal'];
 
 export default function PublicHome() {
+  const navigate = useNavigate();
+  const [categories, setCategories] = useState([]);
+  const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [categoryError, setCategoryError] = useState('');
+
+  useEffect(() => {
+    api.get('/categories').then(setCategories).catch((error) => setCategoryError(error.message || 'Service categories are temporarily unavailable.')).finally(() => setLoading(false));
+  }, []);
+
+  const services = useMemo(() => categories.flatMap((category) => (category.services || []).map((service) => ({ ...service, category }))), [categories]);
+  const matches = query.trim() ? services.filter((service) => `${service.name} ${service.description || ''} ${service.category.name}`.toLowerCase().includes(query.toLowerCase())).slice(0, 5) : [];
+
+  const openSearch = (event) => {
+    event.preventDefault();
+    navigate(`/login?next=${encodeURIComponent('/discover')}`);
+  };
+
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(180deg, #f3f4f6 0%, #eef2ff 100%)',
-      color: '#111827',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '32px 20px',
-    }}>
-      <div style={{ width: '100%', maxWidth: 1200 }}>
-        <header style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 20,
-          marginBottom: 36,
-          padding: '8px 4px',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontWeight: 800, fontSize: 24 }}>
-            <div style={{
-              width: 34,
-              height: 34,
-              borderRadius: 12,
-              background: 'linear-gradient(135deg, #3b82f6, #4f46e5)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#fff',
-              boxShadow: '0 8px 24px rgba(59,130,246,0.25)',
-            }}>
-              <Sparkles size={18} />
-            </div>
-            <span>SmartServiceAI</span>
+    <div className="public-site">
+      <header className="public-nav">
+        <Link to="/" className="public-brand"><span className="public-brand-mark"><Sparkles size={18} /></span><span>SmartService<span className="public-brand-accent">AI</span></span></Link>
+        <nav className="public-nav-links" aria-label="Public navigation"><a href="#services">Services</a><a href="#how-it-works">How it works</a><a href="#assistant">AI Guide</a></nav>
+        <div className="public-nav-actions"><Link to="/login" className="public-nav-login">Sign in</Link><Link to="/register" className="btn btn-primary public-nav-cta">Get started <ArrowUpRight size={16} /></Link></div>
+      </header>
+
+      <main>
+        <section className="public-hero">
+          <div className="public-hero-copy">
+            <div className="public-eyebrow"><span className="public-eyebrow-dot" />Trusted help, thoughtfully matched</div>
+            <h1>Good help should feel <em>closer.</em></h1>
+            <p className="public-hero-lede">Find the right local professional for the things that keep your home, health, learning, and life moving.</p>
+            <form className="public-search" onSubmit={openSearch}>
+              <Search size={19} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="What do you need help with?" aria-label="Search services" /><button type="submit" className="btn btn-primary">Explore <ArrowRight size={16} /></button>
+              {matches.length > 0 && <div className="public-search-results">{matches.map((service) => <Link key={service.id} to={`/login?next=${encodeURIComponent(`/services/${service.category.slug}/${service.slug}`)}`}><span><strong>{service.name}</strong><small>{service.category.name}</small></span><ChevronRight size={16} /></Link>)}</div>}
+            </form>
+            <div className="public-hero-notes"><span><CheckCircle2 size={15} /> Approved marketplace providers</span><span><MapPin size={15} /> Search by your location</span></div>
           </div>
+          <div className="public-hero-visual"><img src="https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=1000&q=85" alt="Professional home service specialist at work" /><div className="public-visual-label"><span className="public-status-dot" /><span><strong>Real people. Real services.</strong><small>Ready when you are</small></span></div><div className="public-visual-float"><ShieldCheck size={18} /><span>Vetted marketplace</span></div></div>
+        </section>
 
-          <nav style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 14, color: '#374151' }}>
-            <Link to="/services" style={{ fontWeight: 600 }}>Services</Link>
-            <Link to="/discover" style={{ fontWeight: 600 }}>Discover</Link>
-            <Link to="/login" style={{ fontWeight: 600 }}>Login</Link>
-            <Link to="/register" className="btn btn-primary" style={{ padding: '10px 18px', borderRadius: 999, fontWeight: 700 }}>Get Started</Link>
-          </nav>
-        </header>
+        <section className="public-trust-strip"><span>One place for everyday essentials</span><div><span><Home size={17} /> Home</span><span><HeartPulse size={17} /> Healthcare</span><span><BriefcaseBusiness size={17} /> Education</span><span><Wrench size={17} /> Auto</span></div></section>
 
-        <div style={{
-          background: '#ffffff',
-          border: '1px solid rgba(148, 163, 184, 0.2)',
-          borderRadius: 30,
-          boxShadow: '0 32px 80px rgba(15, 23, 42, 0.08)',
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: '1.2fr 0.8fr',
-            gap: 24,
-            padding: '52px 56px',
-            alignItems: 'center',
-          }}>
-            <div>
-              <div style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 8,
-                background: '#eff6ff',
-                border: '1px solid #dbeafe',
-                color: '#1d4ed8',
-                borderRadius: 999,
-                padding: '8px 12px',
-                fontWeight: 700,
-                fontSize: 12,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-              }}>
-                <StarBadge />
-                Trusted home service marketplace
-              </div>
+        <section className="public-section" id="services"><div className="public-section-heading"><div><div className="public-kicker">Explore the marketplace</div><h2>Whatever you need next.</h2></div><Link to="/login?next=%2Fservices" className="public-text-link">View all services <ArrowRight size={16} /></Link></div>{categoryError && <p className="public-inline-error">{categoryError}</p>}{loading ? <div className="public-loading">Loading available services...</div> : <div className="public-category-grid">{categories.map((category, index) => { const Icon = categoryIcons[category.slug] || Sparkles; return <Link className={`public-category-card ${categoryColors[index % categoryColors.length]}`} to={`/login?next=${encodeURIComponent(`/services/${category.slug}`)}`} key={category.id}><span className="public-category-icon"><Icon size={21} /></span><span className="public-category-number">0{index + 1}</span><h3>{category.name}</h3><p>{category.description || 'Explore services from approved local professionals.'}</p><span className="public-category-footer"><strong>{category.services?.length || 0} services</strong><ArrowUpRight size={17} /></span></Link> })}</div>}</section>
 
-              <h1 style={{ margin: '22px 0 16px', fontSize: 'clamp(2.5rem, 5vw, 5rem)', lineHeight: 1.02, letterSpacing: '-0.05em' }}>
-                Reliable Home Services, Right at Your Doorstep
-              </h1>
+        <section className="public-process-band" id="how-it-works"><div className="public-section-heading public-heading-light"><div><div className="public-kicker">A better way to get things done</div><h2>From need to next step.</h2></div><p>Everything you need to make a confident choice, without the noise.</p></div><div className="public-steps"><Step number="01" icon={Search} title="Tell us what you need" text="Describe the job in your own words, or ask the Service Guide." /><Step number="02" icon={ShieldCheck} title="Compare real options" text="See relevant services and approved providers from the marketplace." /><Step number="03" icon={CalendarCheck} title="Book with confidence" text="Choose a provider and manage the appointment in one place." /></div></section>
 
-              <p style={{ marginBottom: 24, maxWidth: 560, color: '#475569', fontSize: 18, lineHeight: 1.7 }}>
-                Book vetted local professionals for repairs, health support, cleaning, education, and more — powered by AI matching and real marketplace data.
-              </p>
+        <section className="public-ai-section" id="assistant"><div className="public-ai-orbit"><div className="public-ai-center"><Bot size={30} /></div><span className="public-orbit-card orbit-one"><Sparkles size={15} /> Understands context</span><span className="public-orbit-card orbit-two"><MapPin size={15} /> Finds nearby options</span><span className="public-orbit-card orbit-three"><ShieldCheck size={15} /> Uses verified data</span></div><div className="public-ai-copy"><div className="public-kicker">Meet your Service Guide</div><h2>Not sure what to book?<br /><em>Start with a conversation.</em></h2><p>Explain the problem, ask a follow-up, or switch categories mid-conversation. The guide uses the live marketplace catalog to help you take the next useful step.</p><Link to="/login?next=%2Fassistant" className="btn btn-primary">Try the AI Guide <ArrowRight size={17} /></Link></div></section>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginBottom: 26 }}>
-                <Link to="/services" className="btn btn-primary" style={{ padding: '14px 22px', borderRadius: 14, fontSize: 16, fontWeight: 700 }}>
-                  Explore Services <ArrowRight size={18} />
-                </Link>
-                <Link to="/discover" className="btn btn-secondary" style={{ padding: '14px 22px', borderRadius: 14, fontSize: 16, fontWeight: 700 }}>
-                  Discover Providers
-                </Link>
-              </div>
+        <section className="public-cta"><div><div className="public-kicker">Your next step is simple</div><h2>Make room for the things<br />that matter.</h2></div><Link to="/register" className="btn btn-light">Create your account <ArrowUpRight size={17} /></Link></section>
+      </main>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', color: '#475569', fontSize: 14 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <MiniAvatar color="#60a5fa">A</MiniAvatar>
-                  <MiniAvatar color="#f59e0b">J</MiniAvatar>
-                  <MiniAvatar color="#34d399">M</MiniAvatar>
-                </div>
-                <span><strong style={{ color: '#0f172a' }}>4.9/5</strong> rated by 12k+ homeowners</span>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <div style={{
-                width: '100%',
-                maxWidth: 460,
-                background: 'linear-gradient(135deg, #f8fafc, #eef2ff)',
-                borderRadius: 28,
-                padding: 24,
-                border: '1px solid #e2e8f0',
-                boxShadow: '0 18px 40px rgba(79,70,229,0.08)',
-              }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 18 }}>
-                  {serviceTiles.map((label, idx) => (
-                    <div key={label} style={{
-                      background: idx % 2 === 0 ? '#f8fafc' : '#f1f5f9',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: 18,
-                      minHeight: 120,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      textAlign: 'center',
-                      padding: 14,
-                      fontWeight: 700,
-                      color: '#1f2937',
-                    }}>
-                      {label}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 20, marginTop: 32 }}>
-          {featureCards.map(({ icon: Icon, title, text }) => (
-            <div key={title} style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 24, padding: 24 }}>
-              <div style={{ width: 52, height: 52, borderRadius: 16, background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#2563eb' }}>
-                <Icon size={24} />
-              </div>
-              <h3 style={{ margin: '18px 0 8px', fontSize: 22 }}>{title}</h3>
-              <p style={{ color: '#475569', lineHeight: 1.7 }}>{text}</p>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ marginTop: 42, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 28, padding: 28 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 22 }}>
-            <h2 style={{ fontSize: 'clamp(2rem, 3vw, 3rem)', lineHeight: 1.1, margin: 0 }}>Why customers choose us</h2>
-            <Link to="/login" className="btn btn-primary" style={{ padding: '12px 20px', borderRadius: 12, fontWeight: 700 }}>
-              Sign In to Book
-            </Link>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 18 }}>
-            {[
-              'On-time, vetted professionals',
-              'Transparent service and price details',
-              'Fast, safe booking flow for real appointments',
-            ].map((item) => (
-              <div key={item} style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#111827', background: '#f8fafc', borderRadius: 16, padding: 16, border: '1px solid #e2e8f0' }}>
-                <CheckCircle2 size={20} color="#10b981" />
-                <span style={{ fontWeight: 600 }}>{item}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      <footer className="public-footer"><div className="public-footer-main"><div><Link to="/" className="public-brand public-brand-footer"><span className="public-brand-mark"><Sparkles size={16} /></span><span>SmartService<span className="public-brand-accent">AI</span></span></Link><p>Everyday services, made easier to find.</p></div><div className="public-footer-links"><div><strong>Explore</strong><Link to="/login?next=%2Fservices">Services</Link><Link to="/login?next=%2Fdiscover">Discover</Link></div><div><strong>Company</strong><a href="#how-it-works">How it works</a><a href="#assistant">Service Guide</a></div><div><strong>Account</strong><Link to="/login">Sign in</Link><Link to="/register">Create account</Link></div></div></div><div className="public-footer-bottom"><span>© 2026 SmartServiceAI</span><span>Built around real marketplace data</span></div></footer>
     </div>
   );
 }
 
-function MiniAvatar({ children, color }) {
-  return (
-    <span style={{
-      width: 28,
-      height: 28,
-      borderRadius: '50%',
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      background: color,
-      color: '#fff',
-      fontSize: 12,
-      fontWeight: 700,
-      boxShadow: '0 8px 20px rgba(15, 23, 42, 0.08)',
-    }}>{children}</span>
-  );
-}
-
-function StarBadge() {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.75l2.61 5.29 5.84.85-4.22 4.11 1 5.82-5.23-2.75-5.23 2.75 1-5.82-4.22-4.11 5.84-.85L12 2.75z" /></svg>
-    </span>
-  );
+function Step({ number, icon: Icon, title, text }) {
+  return <div className="public-step"><span className="public-step-number">{number}</span><span className="public-step-icon"><Icon size={20} /></span><h3>{title}</h3><p>{text}</p></div>;
 }

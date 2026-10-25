@@ -13,4 +13,6 @@ from app.models import (
     Review,
     Rating,
     Recommendation,
+    ChatConversation,
+    ChatMessage,
 )

@@ -155,6 +155,48 @@ def test_recommendations_respect_selected_location_radius():
     assert data["recommendations"] == []
 
 
+def test_service_aliases_match_real_providers_without_cross_location_leakage():
+    from app.core.config import settings
+
+    configured_api_key = settings.LLM_API_KEY
+    settings.LLM_API_KEY = ""
+    try:
+        analysis = client.post("/api/ai/analyze-problem", json={
+            "query": "I need plumbing",
+            "location": "Koramangala, Bengaluru",
+        })
+        assert analysis.status_code == 200
+        analysis_data = analysis.json()
+        assert analysis_data["service"] == "Plumbing"
+        assert analysis_data["service_id"] == 1
+
+        nearby = client.post("/api/ai/recommend", json={
+            "query": "My kitchen tap is leaking",
+            "service_id": analysis_data["service_id"],
+            "location": "Koramangala, Bengaluru",
+            "latitude": 12.9352,
+            "longitude": 77.6245,
+            "max_candidates": 6,
+        })
+        assert nearby.status_code == 200
+        nearby_data = nearby.json()
+        assert nearby_data["recommendations"]
+        assert all(item["service"] == "Plumbing" for item in nearby_data["recommendations"])
+
+        remote = client.post("/api/ai/recommend", json={
+            "query": "I need plumbing",
+            "service_id": analysis_data["service_id"],
+            "location": "Mumbai, Maharashtra",
+            "latitude": 19.0760,
+            "longitude": 72.8777,
+            "max_candidates": 6,
+        })
+        assert remote.status_code == 200
+        assert remote.json()["recommendations"] == []
+    finally:
+        settings.LLM_API_KEY = configured_api_key
+
+
 def test_assistant_chat_uses_grounded_fallback_without_external_llm():
     from app.core.config import settings
 
@@ -174,6 +216,68 @@ def test_assistant_chat_uses_grounded_fallback_without_external_llm():
     data = response.json()
     assert data["suggested_service"]["name"] == "AC Repair"
     assert data["response"]
+
+
+def test_assistant_chat_uses_grounded_fallback_on_llm_timeout(monkeypatch):
+    import httpx
+    from app.core.config import settings
+    from app.services import assistant_service
+
+    class TimeoutClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise httpx.ReadTimeout("simulated provider timeout")
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    configured_api_key = settings.LLM_API_KEY
+    configured_provider = settings.LLM_PROVIDER
+    settings.LLM_API_KEY = "test-key"
+    settings.LLM_PROVIDER = "gemini"
+    monkeypatch.setattr(assistant_service.httpx, "AsyncClient", TimeoutClient)
+    try:
+        response = client.post("/api/assistant/chat", json={"message": "My kitchen sink is leaking"})
+    finally:
+        settings.LLM_API_KEY = configured_api_key
+        settings.LLM_PROVIDER = configured_provider
+
+    assert response.status_code == 200
+    assert response.json()["suggested_service"]["name"] == "Plumbing"
+    assert response.json()["response"]
+
+
+def test_chat_provider_failure_persists_user_message_for_retry(monkeypatch):
+    from app.services.assistant_service import AssistantService
+    import uuid
+
+    login = client.post("/api/auth/login", json={
+        "email": "user@marketplace.com",
+        "password": "UserPassword123!",
+    })
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    conversation = client.post("/api/chat/conversations", json={}, headers=headers).json()
+    request_id = str(uuid.uuid4())
+
+    async def fail_chat(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(AssistantService, "process_chat", fail_chat)
+    response = client.post(
+        f"/api/chat/conversations/{conversation['id']}/messages",
+        json={"message": "test retry persistence", "client_message_id": request_id},
+        headers=headers,
+    )
+
+    assert response.status_code == 502
+    messages = client.get(
+        f"/api/chat/conversations/{conversation['id']}/messages",
+        headers=headers,
+    ).json()
+    assert len(messages) == 1
+    assert messages[0]["client_message_id"] == request_id
 
 
 def test_provider_can_view_and_accept_customer_booking():

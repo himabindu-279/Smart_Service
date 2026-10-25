@@ -1,5 +1,6 @@
 import logging
 import json
+import asyncio
 import httpx
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
@@ -89,19 +90,22 @@ class ProblemAnalyzer:
 
         try:
             if is_gemini:
-                model_name = settings.LLM_MODEL or "gemini-3.8-flash"
+                model_name = settings.LLM_MODEL or "gemini-1.5-flash"
                 try:
-                    from google import genai
-                    from google.genai import types
-                    client = genai.Client(api_key=settings.LLM_API_KEY)
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=prompt_system,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            temperature=0.2
+                    def _sync_sdk_call():
+                        from google import genai
+                        from google.genai import types
+                        client = genai.Client(api_key=settings.LLM_API_KEY)
+                        return client.models.generate_content(
+                            model=model_name,
+                            contents=prompt_system,
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json",
+                                temperature=0.2
+                            )
                         )
-                    )
+
+                    response = await asyncio.wait_for(asyncio.to_thread(_sync_sdk_call), timeout=3.5)
                     raw_text = response.text.strip()
                     if raw_text.startswith("```json"):
                         raw_text = raw_text.replace("```json", "", 1).rstrip("`").strip()
@@ -110,7 +114,7 @@ class ProblemAnalyzer:
                     parsed = json.loads(raw_text)
                     return cls._format_response(parsed, query)
                 except Exception as sdk_err:
-                    logger.info(f"Gemini SDK call note: {sdk_err}, attempting REST fallback...")
+                    logger.info(f"Gemini SDK note: {sdk_err}, attempting fast REST fallback...")
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.LLM_API_KEY}"
                     payload = {
                         "contents": [{"parts": [{"text": prompt_system}]}],
@@ -119,7 +123,7 @@ class ProblemAnalyzer:
                             "temperature": 0.2
                         }
                     }
-                    async with httpx.AsyncClient(timeout=10.0) as client:
+                    async with httpx.AsyncClient(timeout=3.0) as client:
                         res = await client.post(url, json=payload)
                         if res.status_code == 200:
                             data = res.json()
@@ -139,7 +143,7 @@ class ProblemAnalyzer:
                     {"role": "system", "content": prompt_system},
                     {"role": "user", "content": f"User Problem: '{query}'. Target Location: '{location or 'Local'}'"}
                 ]
-                async with httpx.AsyncClient(timeout=10.0) as client:
+                async with httpx.AsyncClient(timeout=3.5) as client:
                     res = await client.post(
                         f"{base_url}/chat/completions",
                         headers=headers,
@@ -156,7 +160,7 @@ class ProblemAnalyzer:
                         parsed = json.loads(raw_text)
                         return cls._format_response(parsed, query)
         except Exception as e:
-            logger.warning(f"External LLM call failed ({e}); falling back to expert diagnostic engine.")
+            logger.warning(f"External LLM call skipped/timed out ({e}); continuing with expert diagnostic engine.")
 
         return None
 
@@ -539,6 +543,7 @@ class ProblemAnalyzer:
         matched_service = None
         matched_score = 0.0
         for service, score in ranked:
+            logger.info("Service candidate '%s' (%s) scored %.3f for query '%s'", service.name, service.slug, score, query_text)
             if score >= 0.58:
                 matched_service = service
                 matched_score = score
@@ -572,6 +577,7 @@ class ProblemAnalyzer:
             "No marketplace service matches this problem closely enough. "
             "Please describe the issue using a supported service category or a more specific fault."
         )
+        logger.info("No service accepted for query '%s'; best score was %.3f", query_text, ranked[0][1] if ranked else 0.0)
 
     @classmethod
     def _apply_query_overrides(cls, analysis: Dict[str, Any], q_lower: str):

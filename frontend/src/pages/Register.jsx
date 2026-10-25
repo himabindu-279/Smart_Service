@@ -76,10 +76,11 @@ export default function Register() {
   };
 
   return (
-    <div className="container" style={{ padding: '3.5rem 1.5rem 6rem', maxWidth: '540px' }}>
-      <div className="card" style={{ padding: '2.5rem' }}>
+    <div className="auth-page">
+      <div className="auth-card auth-card-wide">
+        <Link to="/" className="auth-back-link">← SmartServiceAI</Link>
         <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
-          <div style={{
+          <div className="auth-mark" style={{
             background: 'var(--primary-light)',
             color: 'var(--primary)',
             width: '48px',
