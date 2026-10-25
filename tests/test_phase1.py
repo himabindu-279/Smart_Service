@@ -112,6 +112,16 @@ def test_login_rejects_mismatched_role():
     assert "registered as USER" in response.json()["detail"]
 
 
+def test_provider_location_is_geocoded_for_customer_matching():
+    from app.utils.geo import geocode_location
+
+    result = geocode_location("Rajam")
+    assert result
+    assert result[0]["display_name"] == "Rajam, Andhra Pradesh, India"
+    assert result[0]["latitude"] == 18.4656
+    assert result[0]["longitude"] == 83.6594
+
+
 def test_customer_can_update_profile_and_primary_location():
     import uuid
 

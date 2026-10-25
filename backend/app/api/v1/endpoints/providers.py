@@ -12,7 +12,7 @@ from app.models.user import User
 from app.models.review import Review
 from app.models.enums import ServiceApprovalStatus, UserRole
 from app.api.deps import get_current_active_user, require_provider
-from app.utils.geo import haversine_distance
+from app.utils.geo import haversine_distance, geocode_location
 
 router = APIRouter()
 
@@ -303,7 +303,20 @@ def update_my_provider_profile(
     if not provider:
         raise HTTPException(status_code=404, detail="Provider profile not found.")
 
-    for field, val in profile_in.model_dump(exclude_unset=True).items():
+    profile_data = profile_in.model_dump(exclude_unset=True)
+    if "address" in profile_data and profile_data["address"]:
+        matches = geocode_location(profile_data["address"])
+        if not matches:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="We could not find that service location. Choose a recognized city or area.",
+            )
+        location = matches[0]
+        profile_data["address"] = location["display_name"]
+        profile_data["latitude"] = location["latitude"]
+        profile_data["longitude"] = location["longitude"]
+
+    for field, val in profile_data.items():
         setattr(provider, field, val)
 
     db.commit()
@@ -406,6 +419,22 @@ def publish_provider_service(
             db.commit()
             db.refresh(service)
 
+    # Resolve the provider's service location once and keep the provider
+    # coordinates aligned with the location customers search.
+    service_location = svc_in.service_location or provider.address
+    if service_location:
+        matches = geocode_location(service_location)
+        if not matches:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="We could not find that service location. Choose a recognized city or area.",
+            )
+        location = matches[0]
+        service_location = location["display_name"]
+        provider.address = service_location
+        provider.latitude = location["latitude"]
+        provider.longitude = location["longitude"]
+
     # 3. Add or update ProviderService record
     existing_ps = db.query(ProviderService).filter(
         ProviderService.provider_id == provider.id,
@@ -417,7 +446,7 @@ def publish_provider_service(
         existing_ps.custom_service_name = svc_in.service_name
         existing_ps.description = svc_in.description
         existing_ps.experience = svc_in.experience
-        existing_ps.service_location = svc_in.service_location or provider.address
+        existing_ps.service_location = service_location
         existing_ps.service_radius_km = svc_in.service_radius or 15.0
         existing_ps.availability_hours = svc_in.availability
         existing_ps.image_url = svc_in.image_url
@@ -437,7 +466,7 @@ def publish_provider_service(
             custom_price=svc_in.base_price,
             description=svc_in.description,
             experience=svc_in.experience,
-            service_location=svc_in.service_location or provider.address,
+            service_location=service_location,
             service_radius_km=svc_in.service_radius or 15.0,
             availability_hours=svc_in.availability,
             image_url=svc_in.image_url,

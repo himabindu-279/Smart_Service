@@ -43,6 +43,8 @@ KNOWN_CITIES: Dict[str, Tuple[float, float, str]] = {
     "dehradun": (30.3165, 78.0322, "Dehradun, Uttarakhand, India"),
     "ranchi": (23.3441, 85.3096, "Ranchi, Jharkhand, India"),
     "guwahati": (26.1445, 91.7362, "Guwahati, Assam, India"),
+    "rajam": (18.4656, 83.6594, "Rajam, Andhra Pradesh, India"),
+    "rajam, andhra pradesh": (18.4656, 83.6594, "Rajam, Andhra Pradesh, India"),
 
     # Popular Localities / Suburbs
     "koramangala": (12.9352, 77.6245, "Koramangala, Bengaluru, Karnataka"),
