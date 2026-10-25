@@ -230,3 +230,37 @@ Run the test suite using `pytest`:
 python -m pytest tests/test_phase1.py -v
 ```
 All 8 automated test suites verify database initialization, registration flows, authentication edge cases, and role restrictions.
+
+## ☁️ Deployment
+
+The Vercel configuration in the repository deploys the React frontend from
+`frontend/`. The FastAPI backend should be deployed separately to a Python
+host such as Render, Railway, or Fly.io because it uses a persistent database
+and heavyweight ML dependencies.
+
+### Deploy the frontend to Vercel
+
+1. Push the repository to GitHub and import it into Vercel.
+2. Keep the repository root as the Vercel project root. The root
+   `vercel.json` installs and builds `frontend/` and enables SPA routing.
+3. Add this Vercel environment variable for the **Production** environment:
+   ```ini
+   VITE_API_BASE_URL=https://<your-backend-domain>/api
+   ```
+4. Deploy. The frontend will be available at the Vercel URL.
+
+### Deploy the backend
+
+Deploy the `backend/` directory using the provider's FastAPI/Python service
+workflow. Configure a production database URL, a long random `SECRET_KEY`,
+the required LLM and SMTP variables, and CORS with the exact Vercel domain:
+```ini
+CORS_ORIGINS=https://<your-vercel-domain>
+```
+
+After deployment, verify:
+```text
+https://<your-backend-domain>/api/health
+```
+Then set `VITE_API_BASE_URL` in Vercel to that backend URL and redeploy the
+frontend.
