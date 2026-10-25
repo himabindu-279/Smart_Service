@@ -24,6 +24,7 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://smart-service-eta.vercel.app",
     ]
 
     # Initial Superuser
@@ -52,15 +53,18 @@ class Settings(BaseSettings):
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        production_origin = "https://smart-service-eta.vercel.app"
         if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",") if i.strip()]
+            origins = [i.strip() for i in v.split(",") if i.strip()]
         elif isinstance(v, list):
-            return v
-        import json
-        try:
-            return json.loads(v)
-        except Exception:
-            return ["*"]
+            origins = v
+        else:
+            import json
+            try:
+                origins = json.loads(v)
+            except Exception:
+                origins = ["*"]
+        return list(dict.fromkeys([*origins, production_origin]))
 
     model_config = SettingsConfigDict(
         env_file=".env",
