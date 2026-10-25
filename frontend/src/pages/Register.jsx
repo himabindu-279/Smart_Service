@@ -33,7 +33,7 @@ export default function Register() {
 
     if (role === 'ADMIN') {
       try {
-        const authenticatedUser = await login(email, password);
+        const authenticatedUser = await login(email, password, role);
         if (authenticatedUser.role !== 'ADMIN') {
           logout();
           throw new Error('This account does not have administrator access.');

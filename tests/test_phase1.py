@@ -102,6 +102,16 @@ def test_login_success_and_get_me():
     assert me_data["role"] == "USER"
 
 
+def test_login_rejects_mismatched_role():
+    response = client.post("/api/auth/login", json={
+        "email": "user@marketplace.com",
+        "password": "UserPassword123!",
+        "role": "ADMIN",
+    })
+    assert response.status_code == 403
+    assert "registered as USER" in response.json()["detail"]
+
+
 def test_customer_can_update_profile_and_primary_location():
     import uuid
 

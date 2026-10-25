@@ -18,3 +18,4 @@ class TokenPayload(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+    role: Optional[UserRole] = None

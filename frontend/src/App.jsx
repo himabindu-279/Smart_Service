@@ -35,6 +35,16 @@ function ProtectedLayout() {
   return <MainLayout />;
 }
 
+function RoleRoute({ allowedRoles, children }) {
+  const { user } = useAuth();
+
+  if (!allowedRoles.includes(user?.role)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return children;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -55,8 +65,8 @@ export default function App() {
         <Route path="/assistant" element={<AIAssistant />} />
         <Route path="/providers/:id" element={<ProviderDetail />} />
         <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/admin" element={<Navigate to="/dashboard?tab=analytics" replace />} />
-        <Route path="/provider" element={<Navigate to="/dashboard?tab=overview" replace />} />
+        <Route path="/admin" element={<RoleRoute allowedRoles={['ADMIN']}><Navigate to="/dashboard?tab=analytics" replace /></RoleRoute>} />
+        <Route path="/provider" element={<RoleRoute allowedRoles={['PROVIDER']}><Navigate to="/dashboard?tab=overview" replace /></RoleRoute>} />
         <Route path="*" element={<Navigate to="/discover" replace />} />
       </Route>
     </Routes>

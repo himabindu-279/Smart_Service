@@ -6,6 +6,7 @@ import { LogIn, Eye, EyeOff, AlertCircle } from 'lucide-react';
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [role, setRole] = useState('USER');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -20,8 +21,13 @@ export default function Login() {
     setLoading(true);
     setError('');
     try {
-      await login(email, password);
-      navigate(nextPath);
+      const authenticatedUser = await login(email, password, role);
+      const rolePath = authenticatedUser.role === 'ADMIN'
+        ? '/admin'
+        : authenticatedUser.role === 'PROVIDER'
+          ? '/provider'
+          : nextPath;
+      navigate(rolePath);
     } catch (err) {
       setError(err.message || 'Login failed. Please verify your credentials.');
     } finally {
@@ -84,6 +90,22 @@ export default function Login() {
               required
               autoComplete="username"
             />
+          </div>
+
+          <div>
+            <label htmlFor="login-role" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
+              Sign in as
+            </label>
+            <select
+              id="login-role"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              required
+            >
+              <option value="USER">Customer</option>
+              <option value="PROVIDER">Service Provider</option>
+              <option value="ADMIN">Administrator</option>
+            </select>
           </div>
 
           <div>

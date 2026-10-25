@@ -65,7 +65,12 @@ class AuthService:
         return db_user, token
 
     @staticmethod
-    def authenticate_user(db: Session, email: str, password: str) -> Tuple[User, Token]:
+    def authenticate_user(
+        db: Session,
+        email: str,
+        password: str,
+        requested_role: Optional[UserRole] = None,
+    ) -> Tuple[User, Token]:
         user = db.query(User).filter(User.email == email.lower().strip()).first()
         if not user:
             raise HTTPException(
@@ -78,6 +83,11 @@ class AuthService:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect email or password.",
                 headers={"WWW-Authenticate": "Bearer"},
+            )
+        if requested_role is not None and user.role != requested_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"This account is registered as {user.role.value}. Select the matching role to sign in.",
             )
         if not user.is_active:
             raise HTTPException(

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.schemas.user import UserCreate
 from app.schemas.token import Token, LoginRequest
+from app.models.enums import UserRole
 from app.services.auth_service import AuthService
 
 router = APIRouter()
@@ -39,11 +40,13 @@ async def login(
         body = await request.json()
         email = body.get("email") or body.get("username")
         password = body.get("password")
+        role = body.get("role")
     else:
         # Form data fallback
         form = await request.form()
         email = form.get("username") or form.get("email")
         password = form.get("password")
+        role = form.get("role")
 
     if not email or not password:
         from fastapi import HTTPException
@@ -52,5 +55,18 @@ async def login(
             detail="Email and password are required."
         )
 
-    _, token = AuthService.authenticate_user(db=db, email=email, password=password)
+    try:
+        requested_role = UserRole(role) if role else None
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Role must be USER, PROVIDER, or ADMIN.",
+        )
+    _, token = AuthService.authenticate_user(
+        db=db,
+        email=email,
+        password=password,
+        requested_role=requested_role,
+    )
     return token
