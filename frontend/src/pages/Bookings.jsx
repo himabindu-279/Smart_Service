@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { Calendar, Clock, MapPin, CheckCircle, AlertCircle, Star, MessageSquare, X } from 'lucide-react';
+import { useI18n } from '../context/I18nContext';
 
 export default function Bookings() {
+  const { t } = useI18n();
   const { user } = useAuth();
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -27,12 +29,12 @@ export default function Bookings() {
   };
 
   const handleCancelBooking = async (bookingId) => {
-    if (!window.confirm('Are you sure you want to cancel this booking?')) return;
+    if (!window.confirm(t('bookings.cancelConfirm'))) return;
     try {
       await api.patch(`/bookings/${bookingId}/status`, { status: 'CANCELLED' });
       fetchBookings();
     } catch (err) {
-      alert(err.message || 'Error cancelling booking');
+      alert(err.message || t('bookings.cancelError'));
     }
   };
 
@@ -45,12 +47,12 @@ export default function Bookings() {
         score: ratingScore,
         review_text: reviewText
       });
-      alert('Thank you! Your review was recorded.');
+      alert(t('bookings.reviewThanks'));
       setReviewBooking(null);
       setReviewText('');
       fetchBookings();
     } catch (err) {
-      alert(err.message || 'Error submitting review');
+      alert(err.message || t('bookings.reviewError'));
     } finally {
       setSubmittingReview(false);
     }
@@ -59,41 +61,41 @@ export default function Bookings() {
   const getStatusBadge = (status) => {
     switch (status) {
       case 'ACCEPTED':
-        return <span className="badge badge-primary">Accepted</span>;
+        return <span className="badge badge-primary">{t('bookings.accepted')}</span>;
       case 'IN_PROGRESS':
-        return <span className="badge badge-warning">In Progress</span>;
+        return <span className="badge badge-warning">{t('bookings.inProgress')}</span>;
       case 'COMPLETED':
-        return <span className="badge badge-success">Completed</span>;
+        return <span className="badge badge-success">{t('bookings.completed')}</span>;
       case 'CANCELLED':
       case 'REJECTED':
-        return <span className="badge badge-danger">{status}</span>;
+        return <span className="badge badge-danger">{t(`bookings.${status.toLowerCase()}`)}</span>;
       case 'PENDING':
       default:
-        return <span className="badge badge-warning">Pending Provider Confirmation</span>;
+        return <span className="badge badge-warning">{t('bookings.pending')}</span>;
     }
   };
 
   return (
     <div className="container" style={{ padding: '2.5rem 1.5rem 5rem', maxWidth: '900px' }}>
       <div style={{ marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>My Service Bookings</h1>
+        <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>{t('bookings.heading')}</h1>
         <p style={{ color: 'var(--text-muted)' }}>
-          Track real-time status of your doorstep service appointments, updates, and reviews.
+          {t('bookings.description')}
         </p>
       </div>
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: '4rem 0', color: 'var(--text-muted)' }}>
-          Loading your bookings...
+          {t('bookings.loading')}
         </div>
       ) : bookings.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '4rem 2rem' }}>
           <Calendar size={48} color="var(--primary)" style={{ margin: '0 auto 1rem' }} />
-          <h3 style={{ marginBottom: '0.5rem' }}>No Bookings Yet</h3>
+          <h3 style={{ marginBottom: '0.5rem' }}>{t('bookings.none')}</h3>
           <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-            You haven't booked any service appointments yet. Discover top-rated providers now.
+            {t('bookings.noneDescription')}
           </p>
-          <a href="/discover" className="btn btn-primary">Find Services</a>
+          <a href="/discover" className="btn btn-primary">{t('bookings.findServices')}</a>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -107,12 +109,12 @@ export default function Bookings() {
                   </div>
                   <h3 style={{ fontSize: '1.3rem' }}>{b.service_name}</h3>
                   <div style={{ fontSize: '0.9rem', color: 'var(--primary)', fontWeight: 600 }}>
-                    Provider: {b.provider_name}
+                    {t('booking.provider')}: {b.provider_name}
                   </div>
                 </div>
 
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Total Payable</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('bookings.totalPayable')}</div>
                   <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--secondary)' }}>
                     ₹{b.total_amount}
                   </div>
@@ -132,11 +134,11 @@ export default function Bookings() {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-muted)' }}>
                   <Calendar size={16} />
-                  <span>Scheduled: <b>{b.booking_date}</b></span>
+                  <span>{t('bookings.scheduled')}: <b>{b.booking_date}</b></span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-muted)' }}>
                   <Clock size={16} />
-                  <span>Time Slot: <b>{b.booking_time}</b></span>
+                  <span>{t('bookings.timeSlot')}: <b>{b.booking_time}</b></span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-muted)' }}>
                   <MapPin size={16} />
@@ -152,7 +154,7 @@ export default function Bookings() {
                     className="btn btn-secondary btn-sm"
                     style={{ color: 'var(--danger)' }}
                   >
-                    Cancel Appointment
+                    {t('bookings.cancelAppointment')}
                   </button>
                 )}
 
@@ -162,13 +164,13 @@ export default function Bookings() {
                     className="btn btn-primary btn-sm"
                   >
                     <Star size={14} />
-                    <span>Rate & Review Specialist</span>
+                    <span>{t('bookings.rateReview')}</span>
                   </button>
                 )}
 
                 {b.has_review && (
                   <span className="badge badge-success" style={{ alignSelf: 'center' }}>
-                    ✓ Reviewed
+                    ✓ {t('bookings.reviewed')}
                   </span>
                 )}
               </div>
@@ -182,7 +184,7 @@ export default function Bookings() {
         <div className="modal-backdrop" onClick={() => setReviewBooking(null)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 style={{ fontSize: '1.3rem' }}>Review {reviewBooking.provider_name}</h2>
+              <h2 style={{ fontSize: '1.3rem' }}>{t('bookings.reviewTitle', { provider: reviewBooking.provider_name })}</h2>
               <button onClick={() => setReviewBooking(null)} className="btn btn-secondary btn-sm" style={{ padding: '0.35rem' }}>
                 <X size={18} />
               </button>
@@ -191,7 +193,7 @@ export default function Bookings() {
             <form onSubmit={handleReviewSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
-                  Rating (1 to 5 Stars)
+                  {t('bookings.rating')}
                 </label>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   {[1, 2, 3, 4, 5].map((star) => (
@@ -224,7 +226,7 @@ export default function Bookings() {
                   rows={4}
                   value={reviewText}
                   onChange={(e) => setReviewText(e.target.value)}
-                  placeholder="Share details of your experience (e.g. prompt arrival, work quality, professionalism)..."
+                  placeholder={t('bookings.reviewPlaceholder')}
                   required
                 />
               </div>
@@ -236,7 +238,7 @@ export default function Bookings() {
                   className="btn btn-secondary"
                   style={{ flex: 1 }}
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
                 <button
                   type="submit"
@@ -244,7 +246,7 @@ export default function Bookings() {
                   className="btn btn-primary"
                   style={{ flex: 1 }}
                 >
-                  {submittingReview ? 'Submitting...' : 'Post Review'}
+                  {submittingReview ? t('booking.submitting') : t('bookings.submitReview')}
                 </button>
               </div>
             </form>

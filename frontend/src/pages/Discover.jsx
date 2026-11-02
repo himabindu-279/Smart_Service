@@ -1,35 +1,36 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { useI18n } from '../context/I18nContext';
 import {
   Sparkles,
   Search,
   CheckCircle2,
   Star,
   MapPin,
-  Clock,
   ArrowRight,
   ShieldCheck,
-  Tag,
   X,
-  Calendar,
   Navigation,
   Wrench,
   Lightbulb,
   AlertTriangle,
-  HelpCircle,
-  CheckSquare,
-  Square
+  Mic,
+  Camera,
+  ImagePlus,
+  Trash2,
 } from 'lucide-react';
 
 export default function Discover() {
+  const { t, language } = useI18n();
   const [query, setQuery] = useState('');
   const [location, setLocation] = useState('');
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [locationSuggestions, setLocationSuggestions] = useState([]);
   const [locationSaved, setLocationSaved] = useState(false);
   const [searchError, setSearchError] = useState('');
+  const [apiError, setApiError] = useState('');
   const [locationError, setLocationError] = useState('');
   const [resolvedLocation, setResolvedLocation] = useState('');
   const [detectingGps, setDetectingGps] = useState(false);
@@ -39,6 +40,17 @@ export default function Discover() {
   const [checkedSteps, setCheckedSteps] = useState({});
   const [recommendations, setRecommendations] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [problemImage, setProblemImage] = useState(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [imageError, setImageError] = useState('');
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceError, setVoiceError] = useState('');
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const imageInputRef = useRef(null);
+  const cameraVideoRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+  const voiceRecognitionRef = useRef(null);
   const { user } = useAuth();
   const navigate = useNavigate();
 
@@ -57,15 +69,24 @@ export default function Discover() {
   const [bookingSuccess, setBookingSuccess] = useState(false);
   const [bookingError, setBookingError] = useState('');
 
-  // Sample problems matching the exact user specification
-  const samplePrompts = [
-    "My AC remote is not working",
-    "My AC is running but not cooling",
-    "My bathroom pipe is leaking",
-    "I have severe tooth pain",
-    "My laptop is very slow",
-    "My tap is leaking"
-  ];
+  useEffect(() => () => {
+    if (problemImage?.previewUrl) URL.revokeObjectURL(problemImage.previewUrl);
+  }, [problemImage?.previewUrl]);
+
+  useEffect(() => () => {
+    voiceRecognitionRef.current?.abort();
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
+
+  useEffect(() => {
+    const video = cameraVideoRef.current;
+    if (!cameraOpen || !video || !cameraStreamRef.current) return undefined;
+    video.srcObject = cameraStreamRef.current;
+    video.play().catch(() => setCameraError(t('discover.cameraFailed')));
+    return () => {
+      video.srcObject = null;
+    };
+  }, [cameraOpen, t]);
 
   useEffect(() => {
     let isMounted = true;
@@ -110,7 +131,12 @@ export default function Discover() {
     const timer = window.setTimeout(async () => {
       try {
         const suggestions = await api.get('/maps/search-suggestions', { query: location, limit: 5 });
-        setLocationSuggestions(suggestions);
+        const uniqueSuggestions = new Map();
+        (Array.isArray(suggestions) ? suggestions : []).forEach((suggestion) => {
+          const key = `${suggestion.latitude}:${suggestion.longitude}`;
+          if (!uniqueSuggestions.has(key)) uniqueSuggestions.set(key, suggestion);
+        });
+        setLocationSuggestions([...uniqueSuggestions.values()]);
       } catch {
         setLocationSuggestions([]);
       }
@@ -148,7 +174,13 @@ export default function Discover() {
    *                                   ↓
    *                          Show providers
    */
-  const handleProblemAnalysis = async (searchQuery, targetLocation = location, coords = null, forceShowProviders = false) => {
+  const handleProblemAnalysis = async (
+    searchQuery,
+    targetLocation = location,
+    coords = null,
+    forceShowProviders = false,
+    imageId = null,
+  ) => {
     if (!searchQuery || !searchQuery.trim()) return;
 
     setLoading(true);
@@ -156,14 +188,17 @@ export default function Discover() {
     setCheckedSteps({});
     setRecommendations([]);
     setProblemAnalysis(null);
+    setApiError('');
 
     try {
       const analysis = await api.post('/ai/analyze-problem', {
         query: searchQuery.trim(),
         location: targetLocation || undefined,
+        image_id: imageId || undefined,
       });
 
       setProblemAnalysis(analysis);
+      setImageError(imageId && !analysis.image_context_used ? t('discover.imageAnalysisUnavailable') : '');
 
       if (analysis.decision === 'PROFESSIONAL_SERVICE' && analysis.service_id && !analysis.message) {
         const reqPayload = {
@@ -177,6 +212,10 @@ export default function Discover() {
 
         const recRes = await api.post('/ai/recommend', reqPayload);
         setRecommendations(recRes.recommendations || []);
+        setProblemAnalysis({
+          ...analysis,
+          provider_service_available: recRes.provider_service_available,
+        });
         if (recRes.location) {
           setResolvedLocation(recRes.location);
         }
@@ -186,11 +225,7 @@ export default function Discover() {
     } catch (err) {
       console.error('Error analyzing problem in Discover:', err);
       setRecommendations([]);
-      setProblemAnalysis({
-        decision: 'NO_MATCH',
-        message: 'We could not analyze this request. Please try a more specific service description.',
-        show_providers: false,
-      });
+      setApiError(err instanceof TypeError ? t('discover.requestFailed') : (err.message || t('discover.requestFailed')));
     } finally {
       setLoading(false);
     }
@@ -205,6 +240,7 @@ export default function Discover() {
 
     setShowProvidersForSimple(true);
     setLoading(true);
+    setApiError('');
     try {
       const targetQuery = query || problemAnalysis?.query || 'General Service';
       const svcId = problemAnalysis?.service_id;
@@ -219,11 +255,16 @@ export default function Discover() {
       };
       const recRes = await api.post('/ai/recommend', reqPayload);
       setRecommendations(recRes.recommendations || []);
+      setProblemAnalysis((current) => current ? {
+        ...current,
+        provider_service_available: recRes.provider_service_available,
+      } : current);
       if (recRes.location) {
         setResolvedLocation(recRes.location);
       }
     } catch (err) {
       console.error('Error escalating to professional providers:', err);
+      setApiError(err instanceof TypeError ? t('discover.requestFailed') : (err.message || t('discover.requestFailed')));
     } finally {
       setLoading(false);
     }
@@ -232,15 +273,16 @@ export default function Discover() {
   const handleSearch = (e) => {
     e.preventDefault();
     setSearchError('');
+    setApiError('');
     setLocationError('');
 
     if (!query.trim()) {
-      setSearchError('Describe the problem you need help with before searching.');
+      setSearchError(t('discover.queryRequired'));
       return;
     }
 
     if (!selectedLocation) {
-      setLocationError('Choose a suggested location or use your current location to see nearby providers.');
+      setLocationError(t('discover.locationRequired'));
       return;
     }
 
@@ -262,21 +304,155 @@ export default function Discover() {
           setLocationSaved(true);
         }
 
+        let imageId = problemImage?.imageId || null;
+        if (problemImage && !imageId) {
+          setUploadingImage(true);
+          setImageError('');
+          try {
+            const form = new FormData();
+            form.append('upload', problemImage.file);
+            const uploaded = await api.post('/ai/problem-images', form);
+            imageId = uploaded.image_id;
+            setProblemImage((current) => (
+              current?.file === problemImage.file ? { ...current, imageId } : current
+            ));
+          } catch (uploadError) {
+            setImageError(uploadError.message || t('discover.imageUploadFailed'));
+            return;
+          } finally {
+            setUploadingImage(false);
+          }
+        }
+
         handleProblemAnalysis(query, selectedLocation.display_name, {
           latitude: selectedLocation.latitude,
           longitude: selectedLocation.longitude,
-        });
+        }, false, imageId);
       } catch (err) {
-        setLocationError(err.message || 'Could not save your service location. Try again.');
+        setLocationError(err.message || t('discover.saveLocationFailed'));
       }
     };
 
     saveLocationAndSearch();
   };
 
+  const attachProblemImage = (file) => {
+    if (!file) return;
+    const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!validTypes.includes(file.type)) {
+      setImageError(t('discover.imageTypeError'));
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setImageError(t('discover.imageSizeError'));
+      return;
+    }
+    setImageError('');
+    setProblemImage({
+      file,
+      imageId: null,
+      previewUrl: URL.createObjectURL(file),
+    });
+  };
+
+  const handleProblemImage = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    attachProblemImage(file);
+  };
+
+  const openCamera = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError(t('discover.cameraUnsupported'));
+      return;
+    }
+    setCameraError('');
+    try {
+      cameraStreamRef.current = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      });
+      setCameraOpen(true);
+    } catch (error) {
+      console.error('Discover camera could not be opened:', error);
+      setCameraError(t('discover.cameraPermissionDenied'));
+    }
+  };
+
+  const closeCamera = () => {
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    cameraStreamRef.current = null;
+    setCameraOpen(false);
+  };
+
+  const captureCameraImage = () => {
+    const video = cameraVideoRef.current;
+    if (!video?.videoWidth || !video.videoHeight) {
+      setCameraError(t('discover.cameraFailed'));
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        setCameraError(t('discover.cameraFailed'));
+        return;
+      }
+      attachProblemImage(new File([blob], `problem-photo-${Date.now()}.jpg`, { type: 'image/jpeg' }));
+      closeCamera();
+    }, 'image/jpeg', 0.9);
+  };
+
+  const toggleVoiceInput = () => {
+    if (voiceListening) {
+      voiceRecognitionRef.current?.stop();
+      return;
+    }
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceError(t('discover.voiceUnsupported'));
+      return;
+    }
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = { en: 'en-IN', te: 'te-IN', hi: 'hi-IN' }[language] || 'en-IN';
+      recognition.interimResults = false;
+      recognition.continuous = false;
+      recognition.onresult = (event) => {
+        const transcript = Array.from(event.results)
+          .slice(event.resultIndex)
+          .map((result) => result[0]?.transcript || '')
+          .join(' ')
+          .trim();
+        if (transcript) {
+          setQuery((current) => `${current.trim()}${current.trim() ? ' ' : ''}${transcript}`);
+          setSearchError('');
+          setApiError('');
+        }
+      };
+      recognition.onerror = (event) => {
+        if (event.error !== 'aborted') setVoiceError(t('discover.voiceFailed'));
+      };
+      recognition.onend = () => {
+        setVoiceListening(false);
+        voiceRecognitionRef.current = null;
+      };
+      setVoiceError('');
+      voiceRecognitionRef.current = recognition;
+      recognition.start();
+      setVoiceListening(true);
+    } catch {
+      setVoiceListening(false);
+      voiceRecognitionRef.current = null;
+      setVoiceError(t('discover.voiceFailed'));
+    }
+  };
+
   const handleDetectGpsForDiscover = () => {
     if (!navigator.geolocation) {
-      setLocationError('Location detection is not supported by this browser.');
+      setLocationError(t('discover.gpsUnsupported'));
       return;
     }
     setDetectingGps(true);
@@ -298,7 +474,7 @@ export default function Discover() {
       (err) => {
         console.warn('GPS error:', err);
         setDetectingGps(false);
-        setLocationError('Could not detect location. Select a city or area from the suggestions.');
+        setLocationError(t('discover.gpsFailed'));
       },
       { timeout: 8000, enableHighAccuracy: true }
     );
@@ -323,8 +499,7 @@ export default function Discover() {
     if (problemAnalysis?.service_id) {
       setSelectedServiceId(problemAnalysis.service_id);
     }
-    const locPart = location || resolvedLocation || 'Local Area';
-    setServiceAddress(`Apartment 4B, Sector 2, ${locPart}`);
+    setServiceAddress(selectedLocation?.display_name || location || resolvedLocation || '');
   };
 
   const handleBookingSubmit = async (e) => {
@@ -341,7 +516,8 @@ export default function Discover() {
         booking_date: bookingDate,
         booking_time: bookingTime,
         service_address: serviceAddress,
-        special_instructions: specialInstructions
+        special_instructions: specialInstructions,
+        problem_image_id: problemImage?.imageId || undefined,
       });
       setBookingSuccess(true);
       setTimeout(() => {
@@ -356,157 +532,272 @@ export default function Discover() {
   };
 
   return (
-    <div style={{ paddingBottom: '4rem' }}>
+    <div className="discover-page">
       {/* Hero Section */}
-      <section style={{
-        background: 'radial-gradient(ellipse at top, #eff6ff 0%, #f8fafc 70%)',
-        padding: '3rem 0 2.5rem',
-        borderBottom: '1px solid var(--border)'
-      }}>
-        <div className="container" style={{ textAlign: 'center', maxWidth: '850px' }}>
-          <div className="badge badge-primary" style={{ marginBottom: '1rem', padding: '0.35rem 0.85rem' }}>
-            <Sparkles size={14} />
-            <span>AI Diagnostic Problem Triage</span>
-          </div>
-
-          <h1 style={{ fontSize: '2.4rem', marginBottom: '0.75rem' }}>
-            Find the right help, nearby
-          </h1>
-          <p style={{ color: 'var(--text-muted)', fontSize: '1.05rem', marginBottom: '1.75rem' }}>
-            Tell us what needs fixing. We will match your request with verified specialists serving your area.
-          </p>
-
-          <form onSubmit={handleSearch} className="discover-search-form">
-            <label className="discover-field-label" htmlFor="problem-search">What do you need help with?</label>
-            <div className="discover-problem-input">
-              <Search size={20} aria-hidden="true" />
-              <input
-                id="problem-search"
-                type="search"
-                placeholder="For example, my kitchen tap is leaking"
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setSearchError('');
-                  setProblemAnalysis(null);
-                  setRecommendations([]);
-                  setResolvedLocation('');
-                }}
-                autoComplete="off"
-                required
-              />
-              {query && (
-                <button type="button" className="discover-clear-button" onClick={() => setQuery('')} aria-label="Clear problem description">
-                  <X size={17} />
-                </button>
-              )}
+      <section className="discover-hero">
+        <div className="discover-hero-inner">
+          <div className="discover-hero-copy">
+            <div className="discover-eyebrow">
+              <span className="discover-eyebrow-icon"><Sparkles size={15} /></span>
+              <span>{t('discover.badge')}</span>
             </div>
+            <h1>{t('discover.title')}</h1>
+            <p className="discover-hero-description">{t('discover.description')}</p>
 
-            <div className="discover-location-row">
-              <div className="discover-location-field">
-                <label className="discover-field-label" htmlFor="service-location">Where should we look?</label>
-                <div className="discover-location-input">
-                  <MapPin size={19} aria-hidden="true" />
-                  <input
-                    id="service-location"
-                    type="text"
-                    placeholder="Search city or area"
-                    value={location}
-                    onChange={(event) => {
-                      setLocation(event.target.value);
-                      setSelectedLocation(null);
-                      setLocationSaved(false);
-                      setLocationError('');
-                      setProblemAnalysis(null);
-                      setRecommendations([]);
-                      setResolvedLocation('');
-                    }}
-                    autoComplete="address-level2"
-                    aria-autocomplete="list"
-                    aria-controls="location-suggestions"
+            <form onSubmit={handleSearch} className="discover-search-form">
+              <label className="discover-field-label" htmlFor="problem-search">{t('discover.problem')}</label>
+              <div className="discover-problem-input">
+                <Search size={20} aria-hidden="true" />
+                <input
+                  id="problem-search"
+                  type="search"
+                  placeholder={t('discover.problemPlaceholder')}
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setSearchError('');
+                    setApiError('');
+                    setProblemAnalysis(null);
+                    setRecommendations([]);
+                    setResolvedLocation('');
+                  }}
+                  autoComplete="off"
+                  required
+                />
+                {query && (
+                  <button type="button" className="discover-clear-button" onClick={() => setQuery('')} aria-label={t('discover.clearProblem')}>
+                    <X size={17} />
+                  </button>
+                )}
+              </div>
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                hidden
+                onChange={handleProblemImage}
+                aria-label={t('discover.addImage')}
+              />
+              <div className="discover-input-tools">
+                <button
+                  type="button"
+                  className="discover-tool-button"
+                  onClick={openCamera}
+                  disabled={uploadingImage || loading || cameraOpen}
+                >
+                  <Camera size={16} />
+                  <span>{t('discover.takePhoto')}</span>
+                </button>
+                <button
+                  type="button"
+                  className="discover-tool-button"
+                  onClick={() => imageInputRef.current?.click()}
+                  disabled={uploadingImage || loading}
+                >
+                  <ImagePlus size={16} />
+                  <span>{problemImage ? t('discover.replaceImage') : t('discover.addImage')}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`discover-tool-button ${voiceListening ? 'is-listening' : ''}`}
+                  onClick={toggleVoiceInput}
+                  aria-pressed={voiceListening}
+                >
+                  <Mic size={16} />
+                  <span>{voiceListening ? t('discover.stopVoice') : t('discover.startVoice')}</span>
+                </button>
+              </div>
+              {cameraOpen && (
+                <div className="discover-camera-panel">
+                  <video
+                    ref={cameraVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    aria-label={t('discover.cameraPreview')}
                   />
+                  <div className="discover-camera-actions">
+                    <button type="button" className="btn btn-primary btn-sm" onClick={captureCameraImage}>
+                      {t('discover.capturePhoto')}
+                    </button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={closeCamera}>
+                      {t('common.cancel')}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {problemImage && (
+                <div className="discover-image-preview">
+                  <img src={problemImage.previewUrl} alt={problemImage.file.name} />
+                  <div>
+                    <strong>{problemImage.file.name}</strong>
+                    <span>{problemImage.imageId ? t('discover.imageAttached') : t('discover.imageSelected')}</span>
+                  </div>
                   <button
                     type="button"
-                    className="discover-gps-button"
-                    onClick={handleDetectGpsForDiscover}
-                    disabled={detectingGps}
-                    title="Use current location"
-                    aria-label="Use current location"
+                    className="discover-remove-image"
+                    onClick={() => {
+                      setProblemImage(null);
+                      setImageError('');
+                      if (imageInputRef.current) imageInputRef.current.value = '';
+                    }}
+                    aria-label={t('discover.removeImage')}
                   >
-                    <Navigation size={17} className={detectingGps ? 'spin' : ''} />
+                    <Trash2 size={16} />
                   </button>
-                  {locationSuggestions.length > 0 && (
-                    <div id="location-suggestions" className="discover-location-suggestions" role="listbox">
-                      {locationSuggestions.map((suggestion) => (
-                        <button
-                          key={`${suggestion.latitude}-${suggestion.longitude}`}
-                          type="button"
-                          role="option"
-                          aria-selected={selectedLocation?.display_name === suggestion.display_name}
-                          onClick={() => selectSuggestedLocation(suggestion)}
-                        >
-                          <MapPin size={16} />
-                          <span>{suggestion.display_name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
                 </div>
-                <div className={`discover-location-status ${locationError ? 'error' : ''}`} aria-live="polite">
-                  {locationError || (selectedLocation
-                    ? `${locationSaved ? 'Saved to your profile' : 'Selected'} · ${selectedLocation.display_name}`
-                    : 'Choose a suggested place or use GPS for accurate nearby results.')}
-                </div>
+              )}
+              {uploadingImage && <div className="discover-input-message" role="status">{t('common.loading')}</div>}
+              {imageError && <div className="discover-input-message is-error" role="status">{imageError}</div>}
+              {voiceError && <div className="discover-input-message is-error" role="status">{voiceError}</div>}
+              {cameraError && <div className="discover-input-message is-error" role="alert">{cameraError}</div>}
+
+              <div className="discover-example-prompts" aria-label={t('discover.tryExamples')}>
+                <span>{t('discover.tryExamples')}</span>
+                {['exampleFan', 'exampleTap', 'exampleFridge'].map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => {
+                      setQuery(t(`discover.${key}`));
+                      setSearchError('');
+                      setApiError('');
+                      setProblemAnalysis(null);
+                      setRecommendations([]);
+                    }}
+                  >
+                    {t(`discover.${key}`)}
+                  </button>
+                ))}
               </div>
 
-              <button type="submit" disabled={loading || detectingGps} className="btn btn-primary discover-submit-button">
-                <Search size={17} />
-                <span>{loading ? 'Finding matches...' : 'Find nearby help'}</span>
-                <ArrowRight size={17} />
-              </button>
-            </div>
-            {searchError && <div className="discover-form-error" role="alert">{searchError}</div>}
-          </form>
+              <div className="discover-location-row">
+                <div className="discover-location-field">
+                  <label className="discover-field-label" htmlFor="service-location">{t('discover.location')}</label>
+                  <div className="discover-location-input">
+                    <MapPin size={19} aria-hidden="true" />
+                    <input
+                      id="service-location"
+                      type="text"
+                      placeholder={t('discover.locationPlaceholder')}
+                      value={location}
+                      onChange={(event) => {
+                        setLocation(event.target.value);
+                        setSelectedLocation(null);
+                        setLocationSaved(false);
+                        setLocationError('');
+                        setApiError('');
+                        setProblemAnalysis(null);
+                        setRecommendations([]);
+                        setResolvedLocation('');
+                      }}
+                      autoComplete="address-level2"
+                      aria-autocomplete="list"
+                      aria-controls="location-suggestions"
+                    />
+                    <button
+                      type="button"
+                      className="discover-gps-button"
+                      onClick={handleDetectGpsForDiscover}
+                      disabled={detectingGps}
+                      title={t('discover.useLocation')}
+                      aria-label={t('discover.useLocation')}
+                    >
+                      <Navigation size={17} className={detectingGps ? 'spin' : ''} />
+                    </button>
+                    {locationSuggestions.length > 0 && (
+                      <div id="location-suggestions" className="discover-location-suggestions" role="listbox">
+                        {locationSuggestions.map((suggestion) => (
+                          <button
+                            key={`${suggestion.latitude}-${suggestion.longitude}`}
+                            type="button"
+                            role="option"
+                            aria-selected={selectedLocation?.display_name === suggestion.display_name}
+                            onClick={() => selectSuggestedLocation(suggestion)}
+                          >
+                            <MapPin size={16} />
+                            <span>{suggestion.display_name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className={`discover-location-status ${locationError ? 'error' : ''}`} aria-live="polite">
+                    {locationError || (selectedLocation
+                      ? `${locationSaved ? t('discover.savedLocation') : t('discover.selectedLocation')} · ${selectedLocation.display_name}`
+                      : t('discover.locationHint'))}
+                  </div>
+                </div>
 
-          {/* User Prompt Test Case Examples */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'center' }}>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', alignSelf: 'center' }}>Try Examples:</span>
-            {samplePrompts.map((p, idx) => (
-              <button
-                key={idx}
-                onClick={() => {
-                  setQuery(p);
-                  setSearchError('');
-                }}
-                style={{
-                  background: query === p ? 'var(--primary-light)' : '#ffffff',
-                  border: `1px solid ${query === p ? 'var(--primary)' : 'var(--border)'}`,
-                  borderRadius: 'var(--radius-full)',
-                  padding: '0.25rem 0.75rem',
-                  fontSize: '0.75rem',
-                  color: query === p ? 'var(--primary)' : 'var(--text-muted)',
-                  cursor: 'pointer',
-                  fontWeight: query === p ? 600 : 400,
-                  transition: 'all 0.15s ease'
-                }}
-              >
-                {p}
-              </button>
-            ))}
+                <button type="submit" disabled={loading || detectingGps} className="btn btn-primary discover-submit-button">
+                  <Search size={17} />
+                  <span>{loading ? t('discover.finding') : t('discover.findHelp')}</span>
+                  <ArrowRight size={17} />
+                </button>
+              </div>
+              {searchError && <div className="discover-form-error" role="alert">{searchError}</div>}
+            </form>
+            {categories.length > 0 && (
+              <nav className="discover-category-links" aria-label={t('discover.categories')}>
+                <span>{t('discover.categories')}:</span>
+                {categories.slice(0, 5).map((category) => (
+                  <Link key={category.id} to={`/services/${category.slug}`}>
+                    {category.name}
+                  </Link>
+                ))}
+              </nav>
+            )}
+          </div>
+
+          <div className="discover-hero-visual" aria-hidden="true">
+            <div className="discover-orbit discover-orbit-one" />
+            <div className="discover-orbit discover-orbit-two" />
+            <div className="discover-visual-grid">
+              <span className="discover-visual-icon discover-icon-tool"><Wrench size={24} /></span>
+              <span className="discover-visual-icon discover-icon-pin"><MapPin size={25} /></span>
+              <span className="discover-visual-icon discover-icon-check"><ShieldCheck size={23} /></span>
+              <span className="discover-visual-center"><Sparkles size={31} /></span>
+            </div>
+            <div className="discover-visual-caption">
+              <span className="discover-caption-dot" />
+              <span>{t('discover.visualCaption')}</span>
+            </div>
           </div>
         </div>
       </section>
 
       {/* Main Content Area */}
-      <div className="container" style={{ marginTop: '2.5rem' }}>
+      <div className="container discover-content">
         {/* Loading Indicator */}
         {loading && (
-          <div className="card" style={{ textAlign: 'center', padding: '2.5rem', marginBottom: '2rem' }}>
-            <Sparkles size={32} className="animate-spin" style={{ margin: '0 auto 1rem', color: 'var(--primary)' }} />
-            <h4 style={{ fontSize: '1.1rem', marginBottom: '0.35rem' }}>LLM Diagnostic Evaluation in Progress</h4>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              Analyzing symptoms, classifying problem complexity, and determining whether DIY guidance or certified professional dispatch is required...
-            </p>
+          <section className="discover-results" aria-live="polite" aria-busy="true">
+            <div className="discover-results-heading">
+              <div>
+                <span className="discover-section-kicker">{t('discover.badge')}</span>
+                <h2>{t('discover.evaluating')}</h2>
+              </div>
+              <span className="discover-loading-label">{t('discover.finding')}</span>
+            </div>
+            <div className="discover-provider-grid">
+              {[0, 1, 2].map((item) => (
+                <div className="discover-provider-skeleton" key={item}>
+                  <span className="skeleton skeleton-title" />
+                  <span className="skeleton skeleton-line" />
+                  <span className="skeleton skeleton-line short" />
+                  <span className="skeleton skeleton-actions" />
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {!loading && apiError && (
+          <div className="discover-error-card" role="alert">
+            <div className="discover-state-icon error"><AlertTriangle size={22} /></div>
+            <div>
+              <h3>{t('discover.requestFailedTitle')}</h3>
+              <p>{apiError}</p>
+            </div>
           </div>
         )}
 
@@ -537,14 +828,15 @@ export default function Discover() {
                   textTransform: 'uppercase'
                 }}>
                   <CheckCircle2 size={15} />
-                  <span>Simple Problem — Self-Troubleshooting Recommended</span>
+                  <span>{t('discover.simpleProblem')}</span>
                 </div>
                 <span style={{ fontSize: '0.85rem', color: '#047857', fontWeight: 600 }}>
                   {problemAnalysis.category} • {problemAnalysis.service}
+                    {problemAnalysis.matched_subservice ? ` · ${problemAnalysis.matched_subservice}` : ''}
                 </span>
               </div>
               <span style={{ fontSize: '0.8rem', color: '#065f46', background: '#d1fae5', padding: '0.25rem 0.6rem', borderRadius: '4px', fontWeight: 600 }}>
-                Zero Cost • No Immediate Booking Needed
+                {t('discover.noCost')}
               </span>
             </div>
 
@@ -568,7 +860,7 @@ export default function Discover() {
                 marginBottom: '1.25rem'
               }}>
                 <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#065f46', marginBottom: '0.65rem', textTransform: 'uppercase' }}>
-                  Step-by-Step Troubleshooting Checklist:
+                  {t('discover.checklist')}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {problemAnalysis.diy_steps.map((step, idx) => {
@@ -615,7 +907,7 @@ export default function Discover() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#166534', fontSize: '0.9rem', fontWeight: 600 }}>
                 <Lightbulb size={18} color="#16a34a" />
                 <span>
-                  {problemAnalysis.follow_up_prompt || `Tried these steps and still experiencing problems?`}
+                  {problemAnalysis.follow_up_prompt || t('discover.followUpDefault')}
                 </span>
               </div>
               <button
@@ -624,7 +916,7 @@ export default function Discover() {
                 className="btn btn-primary btn-sm"
                 style={{ background: '#059669', borderColor: '#059669', color: '#ffffff', fontWeight: 700 }}
               >
-                {showProvidersForSimple ? 'Showing Verified Technicians Below' : `Find ${problemAnalysis.service} Specialists Nearby`}
+                {showProvidersForSimple ? t('discover.showTechnicians') : t('discover.findSpecialists', { service: problemAnalysis.service })}
               </button>
             </div>
           </div>
@@ -643,11 +935,11 @@ export default function Discover() {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.5rem' }}>
               <AlertTriangle size={20} color="#c2410c" />
-              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#9a4d11', textTransform: 'uppercase' }}>No Relevant Marketplace Match</span>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#9a4d11', textTransform: 'uppercase' }}>{t('discover.noMatch')}</span>
             </div>
-            <h3 style={{ fontSize: '1.4rem', marginBottom: '0.5rem', color: '#7c2d12' }}>No suitable provider category matched this request</h3>
+            <h3 style={{ fontSize: '1.4rem', marginBottom: '0.5rem', color: '#7c2d12' }}>{t('discover.noCategory')}</h3>
             <p style={{ fontSize: '1rem', color: '#7c2d12', marginBottom: 0 }}>
-              {problemAnalysis.message || 'Please describe the problem with a supported service or a more specific issue.'}
+              {problemAnalysis.message || t('discover.noCategoryDescription')}
             </p>
           </div>
         )}
@@ -676,14 +968,15 @@ export default function Discover() {
                   textTransform: 'uppercase'
                 }}>
                   <Wrench size={15} />
-                  <span>Professional Service Required</span>
+                  <span>{t('discover.professionalRequired')}</span>
                 </div>
                 <span style={{ fontSize: '0.85rem', color: 'var(--primary)', fontWeight: 600 }}>
-                  Category: {problemAnalysis.category} → {problemAnalysis.service}
+                  {t('discover.category')}: {problemAnalysis.category} → {problemAnalysis.service}
+                  {problemAnalysis.matched_subservice ? ` · ${problemAnalysis.matched_subservice}` : ''}
                 </span>
               </div>
               <span className="badge badge-warning" style={{ fontSize: '0.8rem' }}>
-                Urgency: {problemAnalysis.urgency || 'MODERATE'}
+                {t('discover.urgency')}: {problemAnalysis.urgency || 'MODERATE'}
               </span>
             </div>
 
@@ -707,7 +1000,7 @@ export default function Discover() {
                 marginBottom: '1rem'
               }}>
                 <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.35rem', textTransform: 'uppercase' }}>
-                  Safety & Preliminary Measures Before Technician Arrival:
+                  {t('discover.safety')}
                 </div>
                 <ul style={{ paddingLeft: '1.25rem', fontSize: '0.85rem', color: '#475569' }}>
                   {problemAnalysis.diy_steps.map((step, idx) => (
@@ -734,11 +1027,11 @@ export default function Discover() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <CheckCircle2 size={16} color="var(--primary)" />
                 <span>
-                  Marketplace pipeline activated: Matched certified <strong>{problemAnalysis.service}</strong> specialists near <strong>{resolvedLocation || location || 'your location'}</strong>
+                  {t('discover.pipeline', { location: resolvedLocation || location || t('discover.selectedLocation') })}
                 </span>
               </div>
               <Link to={`/maps?service=${problemAnalysis.service_id}`} className="btn btn-secondary btn-sm" style={{ fontSize: '0.75rem' }}>
-                View Nearby on Maps
+                {t('discover.viewNearby')}
               </Link>
             </div>
           </div>
@@ -748,156 +1041,126 @@ export default function Discover() {
         {/* RECOMMENDED PROVIDERS SECTION                            */}
         {/* ======================================================== */}
         {/* Render providers if professional service, or if user escalated from simple guidance */}
-        {(problemAnalysis?.decision === 'PROFESSIONAL_SERVICE' || showProvidersForSimple) && (
-          <div style={{ marginBottom: '3.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.5rem' }}>
+        {(problemAnalysis?.decision === 'PROFESSIONAL_SERVICE' || showProvidersForSimple) && !apiError && (
+          <section className="discover-results">
+            <div className="discover-results-heading">
               <div>
-                <h2 style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>
-                  Recommended {problemAnalysis?.service || 'Service'} Providers {resolvedLocation ? `in ${resolvedLocation.split(',')[0]}` : (location ? `in ${location.split(',')[0]}` : '')}
+                <span className="discover-section-kicker">{t('discover.badge')}</span>
+                <h2>
+                  {t('discover.recommended', { service: problemAnalysis?.service || t('common.services') })}
                 </h2>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                  Personalized AI matching for <strong>{resolvedLocation || location || 'your chosen location'}</strong>: ranked by suitability, rating, distance, and verified reviews.
+                <p>
+                  {resolvedLocation || location || t('discover.selectedLocation')}
                 </p>
               </div>
             </div>
 
             {recommendations.length === 0 ? (
-              <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
-                <p style={{ color: 'var(--text-muted)' }}>
+              <div className="discover-empty-state">
+                <div className="discover-state-icon"><MapPin size={22} /></div>
+                <h3>{t('discover.emptyTitle')}</h3>
+                <p>
                   {problemAnalysis?.decision === 'NO_MATCH'
-                    ? (problemAnalysis?.message || 'No suitable provider category matched this request.')
-                    : (problemAnalysis?.location_error || 'No verified specialists for this service were found within 50 km of your selected location.')}
+                    ? (problemAnalysis?.message || t('discover.noSuitable'))
+                    : problemAnalysis?.provider_service_available === false
+                      ? t('discover.noProvidersForService', { service: problemAnalysis?.service || t('common.services') })
+                      : (problemAnalysis?.location_error || t('discover.noVerified'))}
                 </p>
+                {problemAnalysis?.provider_service_available === false && (
+                  <Link to="/services" className="btn btn-secondary btn-sm">
+                    {t('discover.browseServices')}
+                  </Link>
+                )}
               </div>
             ) : (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
-                gap: '1.75rem'
-              }}>
+              <div className="discover-provider-grid">
                 {recommendations.map((p) => {
-                  const minPrice = p.price || 500;
-                  const maxPrice = minPrice + 450;
-
                   return (
-                    <div key={p.provider_id} className="card" style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      position: 'relative'
-                    }}>
+                    <article key={p.provider_id} className="discover-provider-card">
                       {/* Card Header */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
+                      <div className="discover-provider-heading">
                         <div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem' }}>
-                            <h3 style={{ fontSize: '1.15rem' }}>{p.business_name}</h3>
+                          <div className="discover-provider-name-row">
+                            <h3>{p.business_name || p.name}</h3>
                             {p.is_verified && (
-                              <ShieldCheck size={18} color="var(--primary)" title="Verified Specialist" />
+                              <ShieldCheck size={18} aria-label={t('discover.verified')} title={t('discover.verified')} />
                             )}
                           </div>
-                          <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                            {p.name} • {p.experience_years} years experience
+                          <p className="discover-provider-subtitle">{p.name}</p>
+                        </div>
+
+                        <div className="discover-match-score">
+                          <strong>{p.match_score}%</strong>
+                          <span>{t('discover.match')}</span>
+                        </div>
+                      </div>
+
+                      <div className="discover-provider-service">
+                        <Wrench size={15} />
+                        <span>{p.service || problemAnalysis?.service || t('common.services')}</span>
+                      </div>
+
+                      <div className="discover-provider-facts">
+                        <div className="discover-provider-fact">
+                          <Star size={16} fill={p.total_ratings > 0 ? 'currentColor' : 'none'} />
+                          <span>
+                            {p.total_ratings > 0 && p.rating_avg != null
+                              ? `${Number(p.rating_avg).toFixed(1)} (${t('booking.reviews', { count: p.total_ratings })})`
+                              : t('booking.newProvider')}
+                          </span>
+                        </div>
+                        <div className="discover-provider-fact">
+                          <MapPin size={16} />
+                          <span>{p.address || t('discover.locationUnavailable')}</span>
+                        </div>
+                        {p.distance_km != null && (
+                          <div className="discover-provider-fact">
+                            <Navigation size={15} />
+                            <span>{p.distance_km} {t('discover.distanceAway')}</span>
                           </div>
-                        </div>
-
-                        {/* Match Score Badge */}
-                        <div style={{
-                          background: 'linear-gradient(135deg, #10b981, #059669)',
-                          color: '#ffffff',
-                          borderRadius: 'var(--radius-md)',
-                          padding: '0.35rem 0.65rem',
-                          textAlign: 'center'
-                        }}>
-                          <div style={{ fontSize: '0.95rem', fontWeight: 800 }}>{p.match_score}%</div>
-                          <div style={{ fontSize: '0.65rem', textTransform: 'uppercase' }}>Match</div>
+                        )}
+                        {p.experience_years != null && (
+                          <div className="discover-provider-fact">
+                            <ShieldCheck size={15} />
+                            <span>{t('discover.experience', { count: p.experience_years })}</span>
+                          </div>
+                        )}
+                        <div className={`discover-availability ${p.is_available ? 'available' : 'unavailable'}`}>
+                          <span />
+                          {p.is_available ? t('discover.available') : t('discover.unavailable')}
                         </div>
                       </div>
 
-                      {/* Stats Strip */}
-                      <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '1rem',
-                        padding: '0.55rem 0.85rem',
-                        background: 'var(--bg-main)',
-                        borderRadius: 'var(--radius-md)',
-                        marginBottom: '1rem',
-                        fontSize: '0.85rem'
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: '#b45309', fontWeight: 700 }}>
-                          <Star size={15} fill="#f59e0b" color="#f59e0b" />
-                          <span>{p.rating_avg}</span>
+                      {p.price != null && (
+                        <div className="discover-provider-price">
+                          <span>{t('discover.servicePrice')}</span>
+                          <strong>₹{Number(p.price).toLocaleString()}</strong>
                         </div>
+                      )}
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: 'var(--text-muted)' }}>
-                          <MapPin size={14} color="var(--primary)" />
-                          <span>{p.distance_km != null ? `${p.distance_km} km` : 'Distance unavailable'} • {p.address}</span>
-                        </div>
-
-                        <div style={{ color: '#059669', fontWeight: 600, fontSize: '0.8rem' }}>
-                          Available Today
-                        </div>
-
-                        <div style={{ marginLeft: 'auto', fontWeight: 800, color: 'var(--secondary)' }}>
-                          ₹{minPrice}–₹{maxPrice}
-                        </div>
-                      </div>
-
-                      {/* Bio */}
-                      <p style={{
-                        fontSize: '0.85rem',
-                        color: 'var(--text-muted)',
-                        marginBottom: '1rem',
-                        lineHeight: 1.5,
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden'
-                      }}>
-                        {p.bio}
-                      </p>
-
-                      {/* Explainable Match Reasons */}
-                      <div style={{
-                        borderTop: '1px dashed var(--border)',
-                        paddingTop: '0.85rem',
-                        marginBottom: '1.25rem'
-                      }}>
-                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
-                          AI Match Justification:
-                        </div>
-                        <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                          {p.reasons?.map((reason, rIdx) => (
-                            <li key={rIdx} style={{ fontSize: '0.8rem', color: '#334155', display: 'flex', alignItems: 'flex-start', gap: '0.4rem' }}>
-                              <CheckCircle2 size={13} color="var(--accent)" style={{ flexShrink: 0, marginTop: '0.2rem' }} />
-                              <span>{reason}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
+                      {p.bio && <p className="discover-provider-bio">{p.bio}</p>}
 
                       {/* Action Buttons */}
-                      <div style={{ marginTop: 'auto', display: 'flex', gap: '0.75rem' }}>
+                      <div className="discover-provider-actions">
                         <Link
                           to={`/providers/${p.provider_id}`}
                           className="btn btn-secondary"
-                          style={{ flex: 1, textAlign: 'center' }}
                         >
-                          View Profile
+                          {t('discover.viewProfile')}
                         </Link>
                         <button
                           onClick={() => openBookModal(p)}
                           className="btn btn-primary"
-                          style={{ flex: 1.2 }}
                         >
-                          Book Now
+                          {t('discover.bookNow')}
                         </button>
                       </div>
-                    </div>
+                    </article>
                   );
                 })}
               </div>
             )}
-          </div>
+          </section>
         )}
 
         {/* If Simple Problem and providers are hidden initially */}
@@ -911,72 +1174,49 @@ export default function Discover() {
           }}>
             <Lightbulb size={36} color="#10b981" style={{ margin: '0 auto 0.75rem' }} />
             <h4 style={{ fontSize: '1.15rem', color: '#064e3b', marginBottom: '0.35rem' }}>
-              Self-Troubleshooting Is Recommended First
+              {t('discover.selfRecommended')}
             </h4>
             <p style={{ color: '#047857', fontSize: '0.9rem', maxWidth: '620px', margin: '0 auto 1.25rem', lineHeight: 1.5 }}>
-              Most issues of this type can be resolved at home at zero cost using the steps above.
-              We avoid dispatching technicians for minor problems you can easily check yourself!
-              If you have tried the checklist and still need on-site inspection, you can view verified specialists below.
+              {t('discover.selfDescription')}
             </p>
             <button
               onClick={handleEscalateToProfessional}
               className="btn btn-primary"
               style={{ background: '#059669', borderColor: '#059669' }}
             >
-              Issue Persists? Show Verified {problemAnalysis.service} Specialists in {location || 'Nearby'}
+              {t('discover.issuePersists', { service: problemAnalysis.service, location: location || t('discover.useLocation') })}
             </button>
           </div>
         )}
 
         {/* Category Explorer Section */}
-        <div>
-          <h2 style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>Service Categories</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-            Explore verified professionals across all marketplace domains
+        <section className="discover-categories">
+          <h2>{t('discover.categories')}</h2>
+          <p>
+            {t('discover.categoriesDescription')}
           </p>
 
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-            gap: '1.25rem'
-          }}>
+          <div className="discover-category-grid">
             {categories.map((cat) => (
               <Link
                 key={cat.id}
                 to={`/services?category=${cat.id}`}
-                className="card"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1rem',
-                  padding: '1.25rem',
-                  transition: 'all 0.2s ease',
-                  border: '1px solid var(--border)'
-                }}
+                className="discover-category-card"
               >
-                <div style={{
-                  width: '42px',
-                  height: '42px',
-                  borderRadius: '10px',
-                  background: 'var(--primary-light)',
-                  color: 'var(--primary)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 700
-                }}>
+                <div className="discover-category-icon">
                   {cat.name.slice(0, 2).toUpperCase()}
                 </div>
                 <div>
-                  <h4 style={{ fontSize: '0.95rem', marginBottom: '0.15rem' }}>{cat.name}</h4>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    {cat.services?.length || 0} Specializations
+                  <h3>{cat.name}</h3>
+                  <span>
+                    {t('discover.specializations', { count: cat.services?.length || 0 })}
                   </span>
                 </div>
+                <ArrowRight size={17} />
               </Link>
             ))}
           </div>
-        </div>
+        </section>
       </div>
 
       {/* In-Page Booking Modal */}
@@ -998,13 +1238,14 @@ export default function Discover() {
           <div className="card" style={{ maxWidth: '520px', width: '100%', padding: '2rem', maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
               <div>
-                <h3 style={{ fontSize: '1.25rem', marginBottom: '0.25rem' }}>Schedule Appointment</h3>
+                <h3 style={{ fontSize: '1.25rem', marginBottom: '0.25rem' }}>{t('discover.schedule')}</h3>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  Booking certified specialist for {problemAnalysis?.service || 'Service'}
+                  {t('discover.bookCertified', { service: problemAnalysis?.service || t('common.services') })}
                 </p>
               </div>
               <button
                 onClick={() => setBookingProvider(null)}
+                aria-label={t('common.close')}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
               >
                 <X size={20} />
@@ -1025,8 +1266,14 @@ export default function Discover() {
                   <span style={{ fontSize: '0.85rem', color: 'var(--primary)', fontWeight: 600 }}>{problemAnalysis?.service || 'Specialist'}</span>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--primary)' }}>₹{bookingProvider.price}</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>📍 {bookingProvider.distance_km} km away</div>
+                  <div style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--primary)' }}>
+                    {bookingProvider.price != null ? `₹${Number(bookingProvider.price).toLocaleString()}` : t('booking.priceOnRequest')}
+                  </div>
+                  {bookingProvider.distance_km != null && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      <MapPin size={12} aria-hidden="true" /> {bookingProvider.distance_km} {t('discover.distanceAway')}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1034,9 +1281,9 @@ export default function Discover() {
             {bookingSuccess ? (
               <div style={{ textAlign: 'center', padding: '2rem 1rem' }}>
                 <CheckCircle2 size={48} color="var(--accent)" style={{ margin: '0 auto 1rem' }} />
-                <h4 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: 'var(--accent)' }}>Appointment Confirmed!</h4>
+                <h4 style={{ fontSize: '1.2rem', marginBottom: '0.5rem', color: 'var(--accent)' }}>{t('discover.success')}</h4>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                  Your booking request has been confirmed. Redirecting to your bookings dashboard...
+                  {t('booking.savedDescription')}
                 </p>
               </div>
             ) : (
@@ -1055,10 +1302,11 @@ export default function Discover() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                   <div>
-                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
-                      Date
+                    <label htmlFor="discover-booking-date" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
+                      {t('discover.date')}
                     </label>
                     <input
+                      id="discover-booking-date"
                       type="date"
                       value={bookingDate}
                       min={new Date().toISOString().split('T')[0]}
@@ -1068,10 +1316,11 @@ export default function Discover() {
                   </div>
 
                   <div>
-                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
-                      Time Slot
+                    <label htmlFor="discover-booking-time" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
+                      {t('discover.time')}
                     </label>
                     <select
+                      id="discover-booking-time"
                       value={bookingTime}
                       onChange={(e) => setBookingTime(e.target.value)}
                       required
@@ -1086,10 +1335,11 @@ export default function Discover() {
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
-                    Doorstep Address
+                  <label htmlFor="discover-booking-address" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
+                    {t('discover.address')}
                   </label>
                   <input
+                    id="discover-booking-address"
                     type="text"
                     value={serviceAddress}
                     onChange={(e) => setServiceAddress(e.target.value)}
@@ -1098,14 +1348,15 @@ export default function Discover() {
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
-                    Instructions / Symptoms
+                  <label htmlFor="discover-booking-instructions" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>
+                    {t('discover.instructions')}
                   </label>
                   <textarea
+                    id="discover-booking-instructions"
                     rows={2}
                     value={specialInstructions}
                     onChange={(e) => setSpecialInstructions(e.target.value)}
-                    placeholder="e.g. Unit makes clicking sound, 2nd floor flat"
+                    placeholder={t('discover.detailsPlaceholder')}
                   />
                 </div>
 
@@ -1116,7 +1367,7 @@ export default function Discover() {
                     className="btn btn-secondary"
                     style={{ flex: 1 }}
                   >
-                    Cancel
+                    {t('common.cancel')}
                   </button>
                   <button
                     type="submit"
@@ -1124,7 +1375,7 @@ export default function Discover() {
                     className="btn btn-primary"
                     style={{ flex: 1 }}
                   >
-                    {bookingSubmitting ? 'Confirming...' : 'Confirm Appointment'}
+                    {bookingSubmitting ? t('maps.confirming') : t('discover.confirm')}
                   </button>
                 </div>
               </form>

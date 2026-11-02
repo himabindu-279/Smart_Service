@@ -11,6 +11,13 @@ from app.models.user import User
 from app.models.enums import ServiceApprovalStatus
 from app.ml.bge_m3_matcher import BGEM3Matcher
 from app.utils.geo import geocode_location, haversine_distance
+from app.services.language_service import (
+    catalog_label,
+    category_label,
+    detect_language,
+    language_instruction,
+    language_message,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -23,7 +30,8 @@ class AssistantService:
         user_lat: Optional[float] = None,
         user_lon: Optional[float] = None,
         location: Optional[str] = None,
-        db: Session = None
+        db: Session = None,
+        response_language: str = "en",
     ) -> Dict[str, Any]:
         """
         RAG AI Assistant pipeline:
@@ -33,12 +41,13 @@ class AssistantService:
         4. Return response with verified actionable marketplace suggestions
         """
         q = message.strip()
+        response_language = detect_language(q, response_language)
         llm_called = False
         llm_status = "not_attempted"
         llm_error = None
         if not q:
             return {
-                "response": "Tell me what is happening or what kind of service you need, and I’ll help find the right next step.",
+                "response": language_message("empty", response_language),
                 "suggested_service": None,
                 "providers": [],
                 "actions": [],
@@ -80,10 +89,7 @@ class AssistantService:
 
         if top_service is None:
             return {
-                "response": (
-                    "I can help with home repairs, healthcare, food, education, and vehicle services. "
-                    "What is the specific problem or outcome you need help with?"
-                ),
+                "response": language_message("clarify", response_language),
                 "suggested_service": None,
                 "providers": [],
                 "actions": [{"label": "Browse services", "type": "NAVIGATE", "path": "/services"}],
@@ -103,6 +109,7 @@ class AssistantService:
                     ProviderService.service_id == top_service.id,
                     ProviderService.is_active == True,
                     ProviderService.status == ServiceApprovalStatus.APPROVED,
+                    Provider.verification_status == "APPROVED",
                     Provider.is_available == True,
                     User.is_active == True,
                 )
@@ -167,6 +174,7 @@ class AssistantService:
                     "Only call a provider verified when its verified field is true. If there are no local provider records, say so plainly. "
                     "If the message does not clearly match a service, ask one short clarifying question instead of guessing. "
                     "Use short paragraphs or bullets, avoid repetitive introductions, and do not mention internal models or technical systems.\n"
+                    f"{language_instruction(response_language)}\n"
                     f"User's request: {q}\n"
                     f"Matched service: {top_service.name}\n"
                     f"Category: {top_service.category.name if top_service.category else 'Marketplace service'}\n"
@@ -249,29 +257,51 @@ class AssistantService:
             logger.info("LLM response skipped because no API key is configured; using grounded catalog synthesis.")
 
         if not llm_response:
-            category_name = top_service.category.name if top_service.category else "Services"
+            category_name = category_label(
+                top_service.category.name if top_service.category else "Services",
+                response_language,
+            )
+            service_name = catalog_label(top_service.slug, top_service.name, response_language)
             provider = relevant_providers[0] if relevant_providers else None
             if provider:
-                verification = "verified " if provider["is_verified"] else ""
-                rating = f", rated {provider['rating']:.1f}/5" if provider["rating"] else ""
-                price = f", from ₹{provider['price']:.0f}" if provider["price"] else ""
-                provider_summary = (
-                    f"Closest matching offer: **{provider['business_name']}**, {verification}provider"
-                    f"{rating}, {provider['distance_km']:.1f} km away{price}."
+                verification = (
+                    {"en": "verified ", "te": "ధృవీకరించిన ", "hi": "सत्यापित "}[response_language]
+                    if provider["is_verified"] else ""
+                )
+                rating = (
+                    {"en": f", rated {provider['rating']:.1f}/5", "te": f", రేటింగ్ {provider['rating']:.1f}/5", "hi": f", रेटिंग {provider['rating']:.1f}/5"}[response_language]
+                    if provider["rating"] else ""
+                )
+                price = (
+                    {"en": f", from ₹{provider['price']:.0f}", "te": f", ₹{provider['price']:.0f} నుండి", "hi": f", ₹{provider['price']:.0f} से"}[response_language]
+                    if provider["price"] else ""
+                )
+                provider_summary = language_message(
+                    "closest_offer",
+                    response_language,
+                    provider=provider["business_name"],
+                    verification=verification,
+                    rating=rating,
+                    distance=provider["distance_km"] or 0,
+                    price=price,
                 )
             elif target_lat is None or target_lon is None:
-                provider_summary = "Set your service location in Discover or your profile to see providers serving your area."
+                provider_summary = language_message("no_location", response_language)
             else:
                 area = location_label or location or "your selected area"
-                provider_summary = f"No approved provider for this service was found within the service area around {area}."
+                provider_summary = language_message("no_providers", response_language, area=area)
 
-            llm_response = (
-                f"**{top_service.name}** is the closest match in {category_name}.\n\n"
-                f"{top_service.description or 'A specialist can assess the issue and recommend the appropriate next step.'}\n\n"
-                f"A typical appointment takes about {top_service.estimated_duration_minutes or 'an hour'} minutes; "
-                f"the catalog starting price is ₹{top_service.base_price:.0f}. Final pricing may vary by provider.\n\n"
-                f"{provider_summary}"
-            )
+            llm_response = "\n\n".join((
+                language_message("closest_match", response_language, service=service_name, category=category_name),
+                language_message("service_details", response_language),
+                language_message(
+                    "duration_price",
+                    response_language,
+                    duration=top_service.estimated_duration_minutes or 60,
+                    price=top_service.base_price,
+                ),
+                provider_summary,
+            ))
 
         # Actions & Suggestions
         suggested_service = None

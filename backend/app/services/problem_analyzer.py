@@ -1,6 +1,8 @@
 import logging
 import json
+import base64
 import asyncio
+import re
 import httpx
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
@@ -25,27 +27,51 @@ class ProblemAnalyzer:
         cls,
         query: str,
         location: Optional[str] = None,
-        db: Session = None
+        db: Session = None,
+        image_bytes: Optional[bytes] = None,
+        image_mime: Optional[str] = None,
     ) -> Dict[str, Any]:
         q = query.strip()
         q_lower = q.lower()
 
         # Step 1: Attempt LLM API call if key is configured
         if settings.LLM_API_KEY:
-            llm_result = await cls._call_external_llm(q, location)
+            service_catalog = []
+            if db is not None:
+                active_services = db.query(Service).filter(Service.is_active == True).all()
+                service_catalog = [
+                    f"{service.category.name if service.category else 'Other'}: {service.name}"
+                    for service in active_services
+                ]
+            llm_result = await cls._call_external_llm(
+                q,
+                location,
+                image_bytes,
+                image_mime,
+                service_catalog,
+            )
             if llm_result:
                 cls._apply_query_overrides(llm_result, q_lower)
                 # Resolve service_id against database
                 cls._enrich_with_db(llm_result, db)
+                llm_result["image_context_used"] = bool(image_bytes and image_mime)
                 return llm_result
 
         # Step 2: Use Built-in Intelligent Diagnostic Reasoning Engine
         analysis = cls._expert_heuristic_reasoning(q_lower, q)
         cls._enrich_with_db(analysis, db)
+        analysis["image_context_used"] = False
         return analysis
 
     @classmethod
-    async def _call_external_llm(cls, query: str, location: Optional[str]) -> Optional[Dict[str, Any]]:
+    async def _call_external_llm(
+        cls,
+        query: str,
+        location: Optional[str],
+        image_bytes: Optional[bytes] = None,
+        image_mime: Optional[str] = None,
+        service_catalog: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
         # Check if Gemini provider or key
         is_gemini = (
             getattr(settings, "LLM_PROVIDER", "").lower() == "gemini"
@@ -56,34 +82,30 @@ class ProblemAnalyzer:
 
         prompt_system = (
             "You are an expert service diagnostic AI for a smart service marketplace.\n"
-            "A user has described a service-related problem. Analyze the problem with these two responsibilities:\n"
+            "Analyze the user's problem and match it only to a currently listed marketplace service.\n"
             "A. If the problem is simple and can reasonably be handled by the user (e.g. AC remote battery dead, computer temp cache/restart, minor tap aerator sediment, loose bulb), "
             "set 'intent': 'guidance', 'show_providers': false, provide empathetic and practical step-by-step DIY troubleshooting guidance, and advise that professional assistance is only needed if troubleshooting fails.\n"
             "B. If the problem requires professional assistance (e.g. AC not cooling/gas leak, pipe burst/bad leakage, severe tooth pain/dental issue, sparking switch/hazard, pest infestation), "
             "set 'intent': 'service_required', 'show_providers': true, clearly identify the Category, Service, and Urgency, and explain the diagnostic reasons.\n\n"
-            "Marketplace Categories:\n"
-            "- Home Services\n"
-            "- Healthcare\n"
-            "- Food Services\n"
-            "- Education\n"
-            "- Automotive\n\n"
-            "Marketplace Services:\n"
-            "AC Repair, Plumbing, Electrical, Cleaning, Pest Control, Doctor Consultation, Nurse at Home, Physiotherapy, Lab Services, "
-            "Catering, Home Food, Baker, Tutors, Programming, Mathematics, English, Car Repair, Bike Repair, Computer & Laptop Repair.\n\n"
+            "Use the following live service catalog. The service value must exactly match one listed service name:\n"
+            f"{chr(10).join(f'- {service}' for service in (service_catalog or [])) or '- No active services are currently listed.'}\n\n"
             "Safety Guidelines:\n"
             "- Never diagnose medical conditions or suggest prescription drugs. Always advise seeing a qualified doctor or healthcare professional.\n"
             "- For electrical or dangerous problems, emphasize safety (e.g., turn off the main circuit breaker first).\n\n"
+            "- If an image is attached, use visible details only as supplemental context and do not infer facts that cannot be seen.\n\n"
+            "- If no listed service is a confident match, set 'intent' to 'no_match', 'show_providers' to false, and ask one concise clarification question. Never guess a default service.\n"
+            "- Respond in the language used by the user (English, Telugu, Hindi, or a natural mixture of them).\n\n"
             f"User Problem: '{query}'\n"
             f"Location: '{location or 'Local'}'\n\n"
             "Return ONLY a valid JSON object matching this exact schema:\n"
             "{\n"
             '  "problem": "...",\n'
-            '  "category": "Home Services" | "Healthcare" | "Food Services" | "Education" | "Automotive",\n'
-            '  "service": "AC Repair" | "Plumbing" | "Electrical" | "Cleaning" | "Pest Control" | "Doctor Consultation" | "Nurse at Home" | "Physiotherapy" | "Computer & Laptop Repair" | ...,\n'
+            '  "category": "exact category name from the live catalog" | null,\n'
+            '  "service": "exact service name from the live catalog" | null,\n'
             '  "urgency": "low" | "normal" | "urgent" | "emergency",\n'
             '  "guidance": "Clear diagnostic advice...",\n'
             '  "show_providers": boolean,\n'
-            '  "intent": "service_required" | "guidance",\n'
+            '  "intent": "service_required" | "guidance" | "no_match",\n'
             '  "diy_steps": ["step 1", "step 2", ...]\n'
             "}"
         )
@@ -91,6 +113,35 @@ class ProblemAnalyzer:
         try:
             if is_gemini:
                 model_name = settings.LLM_MODEL or "gemini-1.5-flash"
+                if image_bytes and image_mime:
+                    url = (
+                        "https://generativelanguage.googleapis.com/v1beta/models/"
+                        f"{model_name}:generateContent?key={settings.LLM_API_KEY}"
+                    )
+                    payload = {
+                        "contents": [{
+                            "parts": [
+                                {"text": prompt_system},
+                                {
+                                    "inlineData": {
+                                        "mimeType": image_mime,
+                                        "data": base64.b64encode(image_bytes).decode("ascii"),
+                                    }
+                                },
+                            ]
+                        }],
+                        "generationConfig": {
+                            "responseMimeType": "application/json",
+                            "temperature": 0.2,
+                        },
+                    }
+                    async with httpx.AsyncClient(timeout=3.5) as client:
+                        res = await client.post(url, json=payload)
+                    if res.status_code == 200:
+                        raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                        return cls._format_response(json.loads(raw_text), query)
+                    logger.warning("Gemini image analysis returned status %s.", res.status_code)
+                    return None
                 try:
                     def _sync_sdk_call():
                         from google import genai
@@ -141,7 +192,28 @@ class ProblemAnalyzer:
                 }
                 messages = [
                     {"role": "system", "content": prompt_system},
-                    {"role": "user", "content": f"User Problem: '{query}'. Target Location: '{location or 'Local'}'"}
+                    {
+                        "role": "user",
+                        "content": (
+                            [
+                                {
+                                    "type": "text",
+                                    "text": f"User Problem: '{query}'. Target Location: '{location or 'Local'}'",
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": (
+                                            f"data:{image_mime};base64,"
+                                            f"{base64.b64encode(image_bytes).decode('ascii')}"
+                                        )
+                                    },
+                                },
+                            ]
+                            if image_bytes and image_mime
+                            else f"User Problem: '{query}'. Target Location: '{location or 'Local'}'"
+                        ),
+                    }
                 ]
                 async with httpx.AsyncClient(timeout=3.5) as client:
                     res = await client.post(
@@ -167,32 +239,41 @@ class ProblemAnalyzer:
     @classmethod
     def _format_response(cls, parsed: Dict[str, Any], query: str) -> Dict[str, Any]:
         show_prov = parsed.get("show_providers", True)
-        if "intent" not in parsed:
+        if parsed.get("intent") == "no_match":
+            show_prov = False
+        elif "intent" not in parsed:
             parsed["intent"] = "service_required" if show_prov else "guidance"
         elif parsed["intent"] == "guidance":
             show_prov = False
 
         guidance_text = parsed.get("guidance", "")
-        svc_name = parsed.get("service", "AC Repair")
+        svc_name = parsed.get("service") or ""
+        decision = (
+            "NO_MATCH" if parsed.get("intent") == "no_match"
+            else "PROFESSIONAL_SERVICE" if show_prov
+            else "SIMPLE_GUIDANCE"
+        )
 
         return {
             "problem": parsed.get("problem", query),
             "category": parsed.get("category", "Home Services"),
-            "service": svc_name,
+            "service": svc_name or None,
             "urgency": parsed.get("urgency", "normal"),
             "guidance": guidance_text,
             "response": guidance_text,
             "show_providers": show_prov,
             "intent": parsed.get("intent", "service_required" if show_prov else "guidance"),
             "diy_steps": parsed.get("diy_steps", []),
-            "decision": "PROFESSIONAL_SERVICE" if show_prov else "SIMPLE_GUIDANCE",
-            "classification": "PROFESSIONAL_SERVICE" if show_prov else "SIMPLE_PROBLEM",
+            "matched_subservice": parsed.get("matched_subservice"),
+            "decision": decision,
+            "classification": decision if decision != "SIMPLE_GUIDANCE" else "SIMPLE_PROBLEM",
             "needs_professional": show_prov,
-            "problem_title": f"{svc_name} Diagnosis",
-            "follow_up_prompt": (
+            "problem_title": f"{svc_name} Diagnosis" if svc_name else "Service Problem",
+            "follow_up_prompt": "" if decision == "NO_MATCH" else (
                 f"Connecting you with verified {svc_name} specialists..."
-                if show_prov else
+                if show_prov and svc_name else
                 f"Would you like to connect with a verified {svc_name} specialist if troubleshooting doesn't work?"
+                if svc_name else ""
             )
         }
 
@@ -409,6 +490,7 @@ class ProblemAnalyzer:
                 "intent": "service_required",
                 "problem": original_query,
                 "problem_title": "Fan Repair & Electrical Inspection",
+                "matched_subservice": "Fan Repair",
                 "guidance": guidance,
                 "response": guidance,
                 "diy_steps": [
@@ -501,34 +583,31 @@ class ProblemAnalyzer:
                 "urgency": "normal"
             }
 
-        # Default Fallback
+        # Do not guess a service when the problem has not matched a supported service.
         guidance = (
-            f"Based on your description ('{original_query}'), our AI diagnostic system has identified that verified marketplace "
-            f"service will provide reliable, safe, and professional resolution."
+            f"We could not confidently match '{original_query}' to a marketplace service. "
+            "Please add the affected item or service and describe what is wrong."
         )
         return {
-            "decision": "PROFESSIONAL_SERVICE",
-            "classification": "PROFESSIONAL_SERVICE",
-            "needs_professional": True,
-            "show_providers": True,
-            "intent": "service_required",
+            "decision": "NO_MATCH",
+            "classification": "NO_MATCH",
+            "needs_professional": False,
+            "show_providers": False,
+            "intent": "no_match",
             "problem": original_query,
-            "problem_title": f"Service Assistance: {original_query[:40]}",
+            "problem_title": "Please describe the service problem",
             "guidance": guidance,
             "response": guidance,
             "diy_steps": [],
-            "follow_up_prompt": "Matching verified specialists in your area...",
-            "category": "Home Services",
-            "service": "AC Repair",
-            "urgency": "normal"
+            "follow_up_prompt": "",
+            "category": None,
+            "service": None,
+            "urgency": "normal",
         }
 
     @classmethod
     def _enrich_with_db(cls, analysis: Dict[str, Any], db: Session):
         if not db:
-            return
-
-        if analysis.get("show_providers") is False and analysis.get("intent") == "guidance":
             return
 
         query_text = str(analysis.get("problem") or analysis.get("service") or "").strip()
@@ -537,6 +616,44 @@ class ProblemAnalyzer:
 
         services = db.query(Service).filter(Service.is_active == True).all()
         if not services:
+            return
+
+        if analysis.get("decision") == "SIMPLE_GUIDANCE" or (
+            analysis.get("show_providers") is False and analysis.get("intent") == "guidance"
+        ):
+            service_label = str(analysis.get("service") or "").strip().casefold()
+            normalized_label = re.sub(r"[^a-z0-9]+", "-", service_label).strip("-")
+            guided_service = next(
+                (
+                    service for service in services
+                    if service.name.casefold() == service_label
+                    or (service.slug or "").casefold() == normalized_label
+                ),
+                None,
+            )
+            guided_score = 1.0 if guided_service else 0.0
+            if not guided_service:
+                ranked = BGEM3Matcher.rank_services(query_text, services)
+                if ranked and ranked[0][1] >= 0.58:
+                    guided_service, guided_score = ranked[0]
+            if guided_service:
+                analysis["service_id"] = guided_service.id
+                analysis["service"] = guided_service.name
+                analysis["service_match_score"] = round(guided_score, 3)
+                if guided_service.category:
+                    analysis["category"] = guided_service.category.name
+                    analysis["category_id"] = guided_service.category.id
+                if guided_service.slug in {
+                    "refrigerator-repair",
+                    "washing-machine-repair",
+                    "microwave-repair",
+                    "dishwasher-repair",
+                }:
+                    analysis["decision"] = "PROFESSIONAL_SERVICE"
+                    analysis["classification"] = "PROFESSIONAL_SERVICE"
+                    analysis["intent"] = "service_required"
+                    analysis["show_providers"] = True
+                    analysis["needs_professional"] = True
             return
 
         ranked = BGEM3Matcher.rank_services(query_text, services)
@@ -607,6 +724,7 @@ class ProblemAnalyzer:
             analysis.update({
                 "category": "Home Services",
                 "service": "Electrical",
+                "matched_subservice": "Fan Repair",
                 "show_providers": True,
                 "needs_professional": True,
                 "intent": "service_required",

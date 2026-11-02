@@ -147,6 +147,7 @@ async def create_message(conversation_id: int, request: MessageCreate, db: Sessi
             user_lon=request.longitude,
             location=request.location,
             db=db,
+            response_language=current_user.preferred_language,
         )
     except Exception as exc:
         db.rollback()

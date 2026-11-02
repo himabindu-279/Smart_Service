@@ -1,33 +1,31 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { User, LogOut, LogIn, Shield, Briefcase } from 'lucide-react';
+import { LogIn, Shield } from 'lucide-react';
+import NotificationBell from './NotificationBell';
+import LanguageSelector from './LanguageSelector';
 
 export default function Topbar() {
-  const { user, logout, isProvider, isAdmin, sessionError } = useAuth();
-  const navigate = useNavigate();
-
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
+  const { user, isProvider, isAdmin, sessionError } = useAuth();
 
   return (
     <header className="topbar">
       {/* Left: Quick system indicator */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+      <div className="topbar-status" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
           <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', display: 'inline-block' }}></span>
           <span>{sessionError || 'Smart Service Marketplace Live'}</span>
         </div>
       </div>
 
-      {/* Top-Right: Profile and Logout (Section 1 requirement) */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+      <div className="topbar-actions">
+        <LanguageSelector className="topbar-language-selector" />
         {user ? (
           <>
+            <NotificationBell />
             <Link
-              to="/dashboard"
+              to="/dashboard?tab=profile"
+              aria-label="Profile"
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -55,17 +53,8 @@ export default function Topbar() {
               }}>
                 {isAdmin ? <Shield size={13} /> : user.full_name?.[0]?.toUpperCase()}
               </div>
-              <span>Profile ({user.role})</span>
+              <span>Profile</span>
             </Link>
-
-            <button
-              onClick={handleLogout}
-              className="btn btn-secondary btn-sm"
-              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-            >
-              <LogOut size={15} />
-              <span>Logout</span>
-            </button>
           </>
         ) : (
           <div style={{ display: 'flex', gap: '0.5rem' }}>

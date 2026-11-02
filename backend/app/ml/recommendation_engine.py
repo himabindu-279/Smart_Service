@@ -117,7 +117,10 @@ class RecommendationEngine:
 
         candidate_query = (
             db.query(Provider)
-            .filter(Provider.is_available == True)
+            .filter(
+                Provider.is_available.is_(True),
+                Provider.verification_status == "APPROVED",
+            )
             .join(ProviderService, ProviderService.provider_id == Provider.id)
             .filter(
                 ProviderService.service_id == target_service.id,
@@ -138,28 +141,33 @@ class RecommendationEngine:
                 logger.info("Provider %s rejected: missing or inactive user", p.id)
                 continue
 
-            dist = None
-            if target_lat is not None and target_lon is not None:
-                if p.latitude is None or p.longitude is None:
-                    logger.info("Provider %s rejected: missing coordinates for requested location '%s'", p.id, resolved_location or location)
-                    continue
-                dist = haversine_distance(target_lat, target_lon, p.latitude, p.longitude)
-                if effective_radius_km and dist > effective_radius_km:
-                    logger.info("Provider %s rejected: distance %.2f km exceeds radius %.2f km", p.id, dist, effective_radius_km)
-                    continue
-
             ps = (
                 db.query(ProviderService)
                 .filter(
                     ProviderService.provider_id == p.id,
                     ProviderService.service_id == target_service.id,
-                    ProviderService.is_active == True,
+                    ProviderService.is_active.is_(True),
                     ProviderService.status == ServiceApprovalStatus.APPROVED
                 )
                 .first()
             )
+            if not ps:
+                continue
 
-            custom_price = ps.custom_price if ps else target_service.base_price
+            dist = None
+            if target_lat is not None and target_lon is not None:
+                service_latitude = ps.service_latitude if ps.service_latitude is not None else p.latitude
+                service_longitude = ps.service_longitude if ps.service_longitude is not None else p.longitude
+                if service_latitude is None or service_longitude is None:
+                    logger.info("Provider %s rejected: missing coordinates for requested location '%s'", p.id, resolved_location or location)
+                    continue
+                dist = haversine_distance(target_lat, target_lon, service_latitude, service_longitude)
+                maximum_distance = min(effective_radius_km, ps.service_radius_km) if effective_radius_km is not None else ps.service_radius_km
+                if dist > maximum_distance:
+                    logger.info("Provider %s rejected: distance %.2f km exceeds coverage %.2f km", p.id, dist, maximum_distance)
+                    continue
+
+            custom_price = ps.custom_price
             service_name = ps.custom_service_name or target_service.name
             bert4rec_score = BERT4RecModel.score_candidate(user_history, p, service_id)
             hgt_dist = dist if dist is not None else 5.0
@@ -191,7 +199,8 @@ class RecommendationEngine:
                 f"BGE-M3 Semantic Match: {int(bge_similarity * 100)}% relevance for {service_name}",
                 f"HGT Graph Suitability: {int(hgt_score * 100)}% structural compatibility",
                 f"Cross-Encoder Re-Ranking: Top match for {urgency} priority requirement",
-                f"DeBERTa-v3 Sentiment: {sentiment_res['summary']} ({p.rating_avg or 4.8}★)"
+                f"DeBERTa-v3 Sentiment: {sentiment_res['summary']} "
+                f"({p.rating_avg:.1f}★)" if p.total_ratings else "New provider with no reviews"
             ]
             if dist is not None:
                 reasons.insert(2, f"Located {dist} km away with verified doorstep service")
@@ -200,13 +209,14 @@ class RecommendationEngine:
 
             scored_results.append({
                 "provider_id": p.id,
+                "provider_service_id": ps.id,
                 "user_id": p.user_id,
                 "name": user.full_name,
                 "business_name": p.business_name or user.full_name,
                 "bio": p.bio,
                 "experience_years": p.experience_years,
-                "rating_avg": p.rating_avg or 4.8,
-                "total_ratings": p.total_ratings or 24,
+                "rating_avg": p.rating_avg,
+                "total_ratings": p.total_ratings,
                 "match_score": match_percentage,
                 "distance_km": dist,
                 "price": custom_price,
@@ -239,5 +249,14 @@ class RecommendationEngine:
             "longitude": target_lon,
             "radius_km": effective_radius_km,
             "recommendations": scored_results[:max_candidates],
-            "message": "Providers matched for the detected service." if scored_results else "No providers matched the service and constraints for this request."
+            "provider_service_available": bool(providers),
+            "message": (
+                "Providers matched for the detected service."
+                if scored_results
+                else (
+                    "No approved and available providers currently offer this service."
+                    if not providers
+                    else "No provider offering this service matched the requested location or constraints."
+                )
+            )
         }

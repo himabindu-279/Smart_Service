@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" role="img" aria-label="Service image placeholder">
+  <rect width="800" height="450" fill="#eef3fa"/>
+  <path d="M0 340 230 180l120 95 120-120 330 245v50H0z" fill="#d9e7f7"/>
+  <circle cx="620" cy="110" r="42" fill="#f8c48c"/>
+  <path d="M290 300h220v150H290z" rx="12" fill="#fff"/>
+  <path d="m270 305 130-105 130 105" fill="none" stroke="#3778bd" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M370 450v-95h60v95" fill="#f2a45b"/>
+</svg>

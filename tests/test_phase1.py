@@ -1,14 +1,23 @@
 import pytest
 import sys
 import os
+import tempfile
+import uuid
+from datetime import datetime, timedelta, timezone
+
+TEST_DATABASE_PATH = os.path.join(tempfile.gettempdir(), f"smart-service-tests-{uuid.uuid4().hex}.sqlite3")
+os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE_PATH.replace(os.sep, '/')}"
+os.environ["ENVIRONMENT"] = "development"
+os.environ["SEED_DEMO_DATA"] = "true"
 
 # Add backend directory to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
 from fastapi.testclient import TestClient
 from main import app
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, engine
 from app.db.init_db import init_db
+from app.models.email_verification import EmailVerification
 
 client = TestClient(app)
 
@@ -19,6 +28,10 @@ def setup_database():
     db = SessionLocal()
     init_db(db)
     db.close()
+    yield
+    engine.dispose()
+    if os.path.exists(TEST_DATABASE_PATH):
+        os.remove(TEST_DATABASE_PATH)
 
 
 def test_root_endpoint():
@@ -36,6 +49,26 @@ def test_health_check_endpoint():
     assert data["status"] == "online"
     assert "database" in data
     assert data["database"]["status"] == "healthy"
+
+
+def test_service_catalog_includes_requested_categories():
+    response = client.get("/api/categories")
+    assert response.status_code == 200
+    categories = {item["slug"]: item for item in response.json()}
+    expected_categories = {
+        "home-services",
+        "food-services",
+        "healthcare",
+        "education",
+        "automotive",
+        "appliance-repair",
+        "beauty-personal-care",
+        "moving-services",
+    }
+    assert expected_categories.issubset(categories)
+    assert "refrigerator-repair" in {
+        service["slug"] for service in categories["appliance-repair"]["services"]
+    }
 
 
 def test_register_regular_user():
@@ -60,6 +93,8 @@ def test_register_regular_user():
 def test_register_provider_user():
     import uuid
     unique_email = f"testprovider_{uuid.uuid4().hex[:6]}@example.com"
+    service_response = client.get("/api/services")
+    plumbing = next(item for item in service_response.json() if item["name"] == "Plumbing")
     payload = {
         "email": unique_email,
         "password": "ProviderPass123!",
@@ -71,8 +106,28 @@ def test_register_provider_user():
         "experience_years": 6,
         "address": "BTM Layout 2nd Stage, Bengaluru",
         "latitude": 12.9165,
-        "longitude": 77.6101
+        "longitude": 77.6101,
+        "offered_services": [{
+            "service_id": plumbing["id"],
+            "base_price": 450,
+            "service_location": "BTM Layout 2nd Stage, Bengaluru",
+            "service_radius_km": 15,
+            "availability_hours": "Weekdays",
+            "latitude": 12.9165,
+            "longitude": 77.6101,
+        }],
     }
+    assert client.post("/api/auth/register", json=payload).status_code == 400
+    db = SessionLocal()
+    now = datetime.now(timezone.utc)
+    db.add(EmailVerification(
+        email=unique_email,
+        code_hash="test-verification-hash",
+        expires_at=now + timedelta(minutes=10),
+        verified_at=now,
+    ))
+    db.commit()
+    db.close()
     response = client.post("/api/auth/register", json=payload)
     assert response.status_code == 201
     data = response.json()

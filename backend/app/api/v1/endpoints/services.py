@@ -37,7 +37,11 @@ def get_services(
             )
             .join(Provider, Provider.id == ProviderService.provider_id)
             .join(User, User.id == Provider.user_id)
-            .filter(Provider.is_available == True, User.is_active == True)
+            .filter(
+                Provider.is_available.is_(True),
+                Provider.verification_status == "APPROVED",
+                User.is_active.is_(True),
+            )
             .count()
         )
 
@@ -75,7 +79,11 @@ def get_service_detail(service_id: int, db: Session = Depends(get_db)):
         )
         .join(Provider, Provider.id == ProviderService.provider_id)
         .join(User, User.id == Provider.user_id)
-        .filter(Provider.is_available == True, User.is_active == True)
+        .filter(
+            Provider.is_available.is_(True),
+            Provider.verification_status == "APPROVED",
+            User.is_active.is_(True),
+        )
         .count()
     )
 

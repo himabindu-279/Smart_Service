@@ -8,8 +8,9 @@ let serviceCategoriesCachedAt = 0;
 
 export async function request(endpoint, options = {}) {
   const token = localStorage.getItem('token');
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const headers = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...options.headers,
   };
@@ -47,12 +48,29 @@ export async function request(endpoint, options = {}) {
   return data;
 }
 
+const serializeBody = (body) => (
+  typeof FormData !== 'undefined' && body instanceof FormData
+    ? body
+    : body ? JSON.stringify(body) : undefined
+);
+
 export const api = {
   get: (endpoint, params) => request(endpoint, { method: 'GET', params }),
-  post: (endpoint, body, params) => request(endpoint, { method: 'POST', body: body ? JSON.stringify(body) : undefined, params }),
-  put: (endpoint, body, params) => request(endpoint, { method: 'PUT', body: body ? JSON.stringify(body) : undefined, params }),
-  patch: (endpoint, body, params) => request(endpoint, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined, params }),
+  post: (endpoint, body, params) => request(endpoint, { method: 'POST', body: serializeBody(body), params }),
+  put: (endpoint, body, params) => request(endpoint, { method: 'PUT', body: serializeBody(body), params }),
+  patch: (endpoint, body, params) => request(endpoint, { method: 'PATCH', body: serializeBody(body), params }),
   delete: (endpoint) => request(endpoint, { method: 'DELETE' }),
+  download: async (endpoint) => {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => null);
+      throw new Error(error?.detail || 'Unable to download this document.');
+    }
+    return response.blob();
+  },
 };
 
 export function getServiceCategories() {
@@ -61,7 +79,7 @@ export function getServiceCategories() {
   }
 
   if (!serviceCategoriesRequest) {
-    serviceCategoriesRequest = api.get('/categories', { only_active_providers: true })
+    serviceCategoriesRequest = api.get('/categories')
       .then((categories) => {
         serviceCategoriesCache = categories;
         serviceCategoriesCachedAt = Date.now();

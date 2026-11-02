@@ -3,8 +3,10 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { Star, MapPin, Calendar, Clock, ShieldCheck, CheckCircle2, MessageSquare, AlertCircle, X } from 'lucide-react';
+import { useI18n } from '../context/I18nContext';
 
 export default function ProviderDetail() {
+  const { t } = useI18n();
   const { id } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -84,11 +86,11 @@ export default function ProviderDetail() {
   };
 
   if (loading) {
-    return <div className="container" style={{ padding: '4rem 0', textAlign: 'center' }}>Loading provider details...</div>;
+    return <div className="container" style={{ padding: '4rem 0', textAlign: 'center' }}>{t('provider.loading')}</div>;
   }
 
   if (!provider) {
-    return <div className="container" style={{ padding: '4rem 0', textAlign: 'center' }}>Provider not found.</div>;
+    return <div className="container" style={{ padding: '4rem 0', textAlign: 'center' }}>{t('provider.notFound')}</div>;
   }
 
   return (
@@ -115,18 +117,18 @@ export default function ProviderDetail() {
           <div style={{ flex: 1, minWidth: '280px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
               <h1 style={{ fontSize: '1.85rem' }}>{provider.business_name}</h1>
-              {provider.is_verified && <ShieldCheck size={22} color="var(--primary)" title="Verified" />}
+              {provider.is_verified && <ShieldCheck size={22} color="var(--primary)" title={t('provider.verified')} />}
             </div>
 
             <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', marginBottom: '1rem' }}>
-              {provider.name} • {provider.experience_years} Years Industry Experience • {provider.qualifications}
+              {provider.name} • {t('provider.yearsExperience', { count: provider.experience_years })} • {provider.qualifications}
             </p>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#b45309', fontWeight: 700 }}>
                 <Star size={18} fill="#f59e0b" color="#f59e0b" />
                 <span>{provider.rating_avg}</span>
-                <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({provider.total_ratings} verified reviews)</span>
+                <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({t('provider.verifiedReviews', { count: provider.total_ratings })})</span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-muted)' }}>
@@ -136,7 +138,7 @@ export default function ProviderDetail() {
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#059669', fontWeight: 600 }}>
                 <CheckCircle2 size={18} />
-                <span>Available for Booking</span>
+                <span>{t('provider.available')}</span>
               </div>
             </div>
 
@@ -146,7 +148,7 @@ export default function ProviderDetail() {
                 className="btn btn-primary"
                 style={{ padding: '0.75rem 2rem', fontSize: '1rem' }}
               >
-                Book This Specialist
+                {t('provider.bookThis')}
               </button>
             </div>
           </div>
@@ -157,7 +159,7 @@ export default function ProviderDetail() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '2rem', marginBottom: '2rem' }}>
         {/* Services Offered */}
         <div className="card">
-          <h2 style={{ fontSize: '1.25rem', marginBottom: '1.25rem' }}>Services & Pricing</h2>
+          <h2 style={{ fontSize: '1.25rem', marginBottom: '1.25rem' }}>{t('provider.servicesPricing')}</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {provider.services?.map((s) => (
               <div key={s.service_id} style={{
@@ -171,7 +173,7 @@ export default function ProviderDetail() {
                 <div>
                   <div style={{ fontWeight: 700, fontSize: '1rem' }}>{s.name}</div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    Est. Duration: {s.estimated_duration_minutes} mins
+                    {t('provider.estimatedDuration', { count: s.estimated_duration_minutes })}
                   </div>
                   {s.experience_description && (
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
@@ -189,7 +191,7 @@ export default function ProviderDetail() {
                     className="btn btn-secondary btn-sm"
                     style={{ marginTop: '0.35rem' }}
                   >
-                    Select
+                    {t('provider.select')}
                   </button>
                 </div>
               </div>
@@ -199,16 +201,16 @@ export default function ProviderDetail() {
 
         {/* Bio & Credentials */}
         <div className="card">
-          <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>About Specialist</h2>
+          <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>{t('provider.about')}</h2>
           <p style={{ color: 'var(--text-muted)', lineHeight: 1.7, fontSize: '0.95rem', marginBottom: '1.5rem' }}>
             {provider.bio}
           </p>
 
-          <h3 style={{ fontSize: '1rem', marginBottom: '0.75rem' }}>Certifications & Experience</h3>
+          <h3 style={{ fontSize: '1rem', marginBottom: '0.75rem' }}>{t('provider.certifications')}</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.875rem' }}>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <ShieldCheck size={16} color="var(--primary)" />
-              <span>Background checked and police verified ID</span>
+              <span>{t('provider.backgroundChecked')}</span>
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <CheckCircle2 size={16} color="var(--accent)" />
@@ -216,7 +218,7 @@ export default function ProviderDetail() {
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <Clock size={16} color="var(--warning)" />
-              <span>Punctual arrival with standard toolkits</span>
+              <span>{t('provider.punctual')}</span>
             </div>
           </div>
         </div>
@@ -226,18 +228,18 @@ export default function ProviderDetail() {
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
           <div>
-            <h2 style={{ fontSize: '1.25rem' }}>Customer Reviews & Sentiment</h2>
+            <h2 style={{ fontSize: '1.25rem' }}>{t('provider.reviews')}</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-              Reviews verified through completed bookings and analyzed using DeBERTa transformer sentiment scoring.
+              {t('provider.verifiedSentiment')}
             </p>
           </div>
           <div className="badge badge-success">
-            {provider.rating_avg} / 5.0 Average Score
+            {provider.rating_avg} / 5.0 {t('provider.ratingAverage')}
           </div>
         </div>
 
         {provider.reviews?.length === 0 ? (
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No reviews yet. Be the first to book and review!</p>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>{t('provider.noReviews')}</p>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             {provider.reviews?.map((r) => (
@@ -251,7 +253,7 @@ export default function ProviderDetail() {
                   <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>{r.user_name}</span>
                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                     <span className={`badge ${r.sentiment === 'POSITIVE' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.75rem' }}>
-                      Sentiment: {r.sentiment} ({((r.sentiment_score || 0.9) * 100).toFixed(0)}%)
+                      {t('provider.sentiment')}: {r.sentiment} ({((r.sentiment_score || 0.9) * 100).toFixed(0)}%)
                     </span>
                   </div>
                 </div>
@@ -269,7 +271,7 @@ export default function ProviderDetail() {
         <div className="modal-backdrop" onClick={() => setShowBookingModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 style={{ fontSize: '1.4rem' }}>Book Service Appointment</h2>
+              <h2 style={{ fontSize: '1.4rem' }}>{t('provider.bookAppointment')}</h2>
               <button onClick={() => setShowBookingModal(false)} className="btn btn-secondary btn-sm" style={{ padding: '0.35rem' }}>
                 <X size={18} />
               </button>
@@ -278,8 +280,8 @@ export default function ProviderDetail() {
             {bookingSuccess ? (
               <div style={{ textAlign: 'center', padding: '2rem 0' }}>
                 <CheckCircle2 size={48} color="#10b981" style={{ margin: '0 auto 1rem' }} />
-                <h3 style={{ marginBottom: '0.5rem' }}>Booking Confirmed!</h3>
-                <p style={{ color: 'var(--text-muted)' }}>Redirecting to your Bookings dashboard...</p>
+                <h3 style={{ marginBottom: '0.5rem' }}>{t('provider.bookingConfirmed')}</h3>
+                <p style={{ color: 'var(--text-muted)' }}>{t('provider.redirecting')}</p>
               </div>
             ) : (
               <form onSubmit={handleBookingSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -291,7 +293,7 @@ export default function ProviderDetail() {
 
                 <div>
                   <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
-                    Full Name
+                    {t('provider.fullName')}
                   </label>
                   <input value={customerFullName} onChange={(e) => setCustomerFullName(e.target.value)} required minLength={2} />
                 </div>
@@ -299,13 +301,13 @@ export default function ProviderDetail() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
-                      Mobile Number
+                      {t('booking.phone')}
                     </label>
                     <input type="tel" value={customerMobile} onChange={(e) => setCustomerMobile(e.target.value)} required minLength={8} />
                   </div>
                   <div>
                     <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
-                      Email Address
+                      {t('booking.email')}
                     </label>
                     <input type="email" value={customerEmail} readOnly required />
                   </div>
@@ -313,7 +315,7 @@ export default function ProviderDetail() {
 
                 <div>
                   <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
-                    Select Service
+                    {t('provider.selectService')}
                   </label>
                   <select
                     value={bookingServiceId}
@@ -331,7 +333,7 @@ export default function ProviderDetail() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
-                      Date
+                      {t('provider.date')}
                     </label>
                     <input
                       type="date"
@@ -342,7 +344,7 @@ export default function ProviderDetail() {
                   </div>
                   <div>
                     <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
-                      Time Slot
+                      {t('provider.time')}
                     </label>
                     <select
                       value={bookingTime}
@@ -360,26 +362,26 @@ export default function ProviderDetail() {
 
                 <div>
                   <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
-                    Service Address
+                    {t('provider.address')}
                   </label>
                   <input
                     type="text"
                     value={serviceAddress}
                     onChange={(e) => setServiceAddress(e.target.value)}
-                    placeholder="House/Flat number, Street, Area"
+                    placeholder={t('provider.addressPlaceholder')}
                     required
                   />
                 </div>
 
                 <div>
                   <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>
-                    Special Instructions (Optional)
+                    {t('provider.instructions')} ({t('provider.optional')})
                   </label>
                   <textarea
                     rows={2}
                     value={specialInstructions}
                     onChange={(e) => setSpecialInstructions(e.target.value)}
-                    placeholder="Describe specific issue details, landmark, etc."
+                    placeholder={t('provider.instructionsPlaceholder')}
                   />
                 </div>
 
@@ -390,7 +392,7 @@ export default function ProviderDetail() {
                     className="btn btn-secondary"
                     style={{ flex: 1 }}
                   >
-                    Cancel
+                    {t('common.cancel')}
                   </button>
                   <button
                     type="submit"
@@ -398,7 +400,7 @@ export default function ProviderDetail() {
                     className="btn btn-primary"
                     style={{ flex: 1 }}
                   >
-                    {submitting ? 'Confirming...' : 'Confirm Appointment'}
+                    {submitting ? t('provider.confirming') : t('provider.confirmAppointment')}
                   </button>
                 </div>
               </form>

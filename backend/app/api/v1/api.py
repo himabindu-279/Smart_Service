@@ -13,6 +13,8 @@ from app.api.v1.endpoints import (
     admin,
     assistant,
     chat,
+    orders,
+    notifications,
 )
 
 api_router = APIRouter()
@@ -29,4 +31,6 @@ api_router.include_router(reviews.router, prefix="/reviews", tags=["Reviews & Ra
 api_router.include_router(ai.router, prefix="/ai", tags=["AI & Recommendations"])
 api_router.include_router(assistant.router, prefix="/assistant", tags=["AI Assistant"])
 api_router.include_router(chat.router, prefix="/chat", tags=["Persistent Chat"])
+api_router.include_router(orders.router, prefix="", tags=["Cart & Orders"])
+api_router.include_router(notifications.router, prefix="/notifications", tags=["Notifications"])
 api_router.include_router(admin.router, prefix="/admin", tags=["Admin Operations"])

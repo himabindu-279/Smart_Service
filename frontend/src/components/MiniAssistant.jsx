@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bot, Send, X } from 'lucide-react';
 import { api } from '../api/client';
+import { useI18n } from '../context/I18nContext';
 
 export default function MiniAssistant() {
+  const { t } = useI18n();
   const [serviceLocation, setServiceLocation] = useState(null);
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');
@@ -85,10 +87,10 @@ export default function MiniAssistant() {
   return (
     <div className="mini-assistant">
       {isOpen && (
-        <section className="mini-assistant-panel" aria-label="AI service assistant">
+        <section className="mini-assistant-panel" aria-label={t('chat.assistant')}>
           <header className="mini-assistant-header">
-            <span className="mini-assistant-heading"><Bot size={19} /> Service assistant</span>
-            <button type="button" className="mini-assistant-close" onClick={() => setIsOpen(false)} aria-label="Close assistant">
+            <span className="mini-assistant-heading"><Bot size={19} /> {t('chat.assistant')}</span>
+            <button type="button" className="mini-assistant-close" onClick={() => setIsOpen(false)} aria-label={t('chat.close')}>
               <X size={18} />
             </button>
           </header>
@@ -98,18 +100,18 @@ export default function MiniAssistant() {
                 {message.content}
               </div>
             ))}
-            {loading && <div className="mini-assistant-message assistant">Thinking...</div>}
+            {loading && <div className="mini-assistant-message assistant">{t('chat.thinking')}</div>}
             <div ref={messagesEndRef} />
           </div>
           <form className="mini-assistant-form" onSubmit={handleSubmit}>
             <input
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder="Describe what you need"
-              aria-label="Message the service assistant"
+              placeholder={t('chat.describe')}
+              aria-label={t('chat.describe')}
               disabled={loading}
             />
-            <button type="submit" aria-label="Send message" disabled={loading || !input.trim()}>
+            <button type="submit" aria-label={t('common.send')} disabled={loading || !input.trim()}>
               <Send size={17} />
             </button>
           </form>
@@ -119,8 +121,8 @@ export default function MiniAssistant() {
         type="button"
         className="mini-assistant-launcher"
         onClick={() => setIsOpen((open) => !open)}
-        aria-label={isOpen ? 'Close AI assistant' : 'Open AI assistant'}
-        title="AI service assistant"
+        aria-label={isOpen ? t('chat.close') : t('chat.open')}
+        title={t('chat.assistant')}
       >
         {isOpen ? <X size={23} /> : <Bot size={25} />}
       </button>

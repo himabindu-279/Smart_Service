@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api, getServiceCategories } from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { getServiceTask } from '../config/serviceCatalog';
 import { ArrowLeft, CalendarCheck2, CheckCircle2, Clock3, MapPin, ShieldCheck, Sparkles } from 'lucide-react';
+import { useI18n } from '../context/I18nContext';
 
 const DISPLAY_NAMES = {
   'Home Services': 'Home Service',
@@ -17,6 +19,7 @@ export default function ServiceBookingPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const { t } = useI18n();
 
   const [category, setCategory] = useState(null);
   const [service, setService] = useState(null);
@@ -26,6 +29,9 @@ export default function ServiceBookingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [bookingResult, setBookingResult] = useState(null);
+  const taskSlug = new URLSearchParams(location.search).get('task');
+  const selectedTask = service ? getServiceTask(service.slug, taskSlug) : null;
+  const bookingTitle = selectedTask?.title || service?.name;
   const [form, setForm] = useState({
     customerFullName: user?.full_name || '',
     customerMobile: user?.phone || '',
@@ -176,7 +182,7 @@ export default function ServiceBookingPage() {
     return (
       <div className="container" style={{ padding: '2.5rem 1.5rem 5rem' }}>
         <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-          Loading service details...
+          {t('services.loadingDetails')}
         </div>
       </div>
     );
@@ -187,7 +193,7 @@ export default function ServiceBookingPage() {
       <div className="container" style={{ padding: '2.5rem 1.5rem 5rem' }}>
         <div className="card" style={{ padding: '2rem', textAlign: 'center' }}>
           <p style={{ color: '#991b1b', marginBottom: '1rem' }}>{error}</p>
-          <Link to="/services" className="btn btn-primary">Back to Services</Link>
+          <Link to="/services" className="btn btn-primary">{t('booking.backServices')}</Link>
         </div>
       </div>
     );
@@ -200,38 +206,38 @@ export default function ServiceBookingPage() {
           <CheckCircle2 size={56} color="#10b981" style={{ margin: '0 auto 1rem' }} />
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.45rem 0.85rem', borderRadius: 999, background: '#ecfdf5', color: '#047857', fontWeight: 700, marginBottom: '0.75rem' }}>
             <ShieldCheck size={16} />
-            Booking confirmed
+            {t('booking.confirmed')}
           </div>
 
-          <h1 style={{ marginBottom: '0.75rem' }}>Appointment saved successfully</h1>
+          <h1 style={{ marginBottom: '0.75rem' }}>{t('booking.saved')}</h1>
           <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-            Your booking is now saved in the live marketplace database and waiting for provider confirmation.
+            {t('booking.savedDescription')}
           </p>
 
           <div style={{ background: '#f8fafc', border: '1px solid var(--border)', borderRadius: '18px', padding: '1.25rem', textAlign: 'left', maxWidth: '500px', margin: '0 auto 1.5rem' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
               <div>
-                <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Reference</div>
+                <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>{t('booking.reference')}</div>
                 <div style={{ fontWeight: 800, fontSize: '1.2rem' }}>{bookingResult.booking_reference}</div>
               </div>
               <div>
-                <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Status</div>
+                <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>{t('booking.status')}</div>
                 <div style={{ fontWeight: 800, fontSize: '1.2rem' }}>{bookingResult.status}</div>
               </div>
               <div>
-                <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Service</div>
+                <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>{t('booking.service')}</div>
                 <div style={{ fontWeight: 700 }}>{bookingResult.service_name}</div>
               </div>
               <div>
-                <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Provider</div>
+                <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>{t('booking.provider')}</div>
                 <div style={{ fontWeight: 700 }}>{bookingResult.provider_name}</div>
               </div>
             </div>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-            <Link to="/bookings" className="btn btn-primary">View bookings</Link>
-            <Link to="/services" className="btn btn-secondary">Back to Services</Link>
+            <Link to="/bookings" className="btn btn-primary">{t('booking.viewBookings')}</Link>
+            <Link to="/services" className="btn btn-secondary">{t('booking.backServices')}</Link>
           </div>
         </div>
       </div>
@@ -241,11 +247,11 @@ export default function ServiceBookingPage() {
   return (
     <div className="container" style={{ padding: '2.5rem 1.5rem 5rem', maxWidth: '1100px' }}>
       <nav style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-        <Link to="/services" style={{ color: 'var(--primary)', textDecoration: 'none', fontWeight: 700 }}>Services</Link>
+        <Link to="/services" style={{ color: 'var(--primary)', textDecoration: 'none', fontWeight: 700 }}>{t('common.services')}</Link>
         <span>›</span>
         <Link to={`/services/${categorySlug}`} style={{ color: 'var(--primary)', textDecoration: 'none', fontWeight: 700 }}>{displayName}</Link>
         <span>›</span>
-        <span style={{ color: 'var(--text-main)', fontWeight: 700 }}>{service.name}</span>
+        <span style={{ color: 'var(--text-main)', fontWeight: 700 }}>{bookingTitle}</span>
       </nav>
 
       <div className="card" style={{ padding: '2rem', marginBottom: '2rem' }}>
@@ -255,14 +261,17 @@ export default function ServiceBookingPage() {
               <Sparkles size={14} />
               {displayName}
             </div>
-            <h1 style={{ margin: '1rem 0 0.5rem', fontSize: '2.3rem' }}>{service.name}</h1>
-            <p style={{ color: 'var(--text-muted)', maxWidth: '800px', lineHeight: 1.7, margin: 0 }}>{service.description}</p>
+            <h1 style={{ margin: '1rem 0 0.5rem', fontSize: '2.3rem' }}>{bookingTitle}</h1>
+            <p style={{ color: 'var(--text-muted)', maxWidth: '800px', lineHeight: 1.7, margin: 0 }}>
+              {selectedTask?.description || service.description}
+              {selectedTask && <span style={{ display: 'block', marginTop: '0.35rem' }}>              {t('booking.marketplaceService')}: {service.name}</span>}
+            </p>
           </div>
 
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Starting from</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('booking.startingFrom')}</div>
             <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--secondary)' }}>₹{Number(service.base_price || 0).toLocaleString('en-IN')}</div>
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{service.estimated_duration_minutes || 60} mins</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{service.estimated_duration_minutes || 60} {t('booking.minutes')}</div>
           </div>
         </div>
       </div>
@@ -270,16 +279,16 @@ export default function ServiceBookingPage() {
       <div style={{ display: 'grid', gridTemplateColumns: '1.05fr 0.95fr', gap: '2rem' }}>
         <div className="card" style={{ padding: '1.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h2 style={{ margin: 0 }}>Available providers</h2>
+            <h2 style={{ margin: 0 }}>{t('booking.availableProviders')}</h2>
             <Link to={`/services/${categorySlug}`} className="btn btn-secondary btn-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
               <ArrowLeft size={15} />
-              <span>Back</span>
+              <span>{t('common.back')}</span>
             </Link>
           </div>
 
           {providers.length === 0 ? (
             <div style={{ padding: '2rem', textAlign: 'center', background: '#f8fafc', borderRadius: '18px', color: 'var(--text-muted)' }}>
-              No verified providers are currently available for this service.
+              {t('services.noProviders')}
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -310,15 +319,27 @@ export default function ServiceBookingPage() {
                     </div>
                     <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{provider.name}</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem', flexWrap: 'wrap' }}>
-                      <span>{provider.experience_years} years</span>
-                      <span>{provider.rating_avg || 4.8} ★</span>
-                      {provider.distance_km && <span>{provider.distance_km} km away</span>}
+                      <span>{t('booking.years', { count: provider.experience_years })}</span>
+                      {provider.rating_avg > 0 && provider.total_ratings > 0
+                        ? <span>{provider.rating_avg} ★ ({t('booking.reviews', { count: provider.total_ratings })})</span>
+                        : <span>{t('booking.newProvider')}</span>}
+                      {provider.distance_km != null && <span>{provider.distance_km} km away</span>}
+                      {(provider.services?.find((item) => item.service_id === service.id)?.service_location || provider.address) && (
+                        <span>{provider.services?.find((item) => item.service_id === service.id)?.service_location || provider.address}</span>
+                      )}
+                      {provider.services?.find((item) => item.service_id === service.id)?.availability && (
+                        <span>{provider.services.find((item) => item.service_id === service.id).availability}</span>
+                      )}
                     </div>
                   </div>
 
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>From</div>
-                    <div style={{ fontWeight: 800, color: 'var(--secondary)', fontSize: '1.2rem' }}>₹{provider.services?.[0]?.custom_price || service.base_price}</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{t('common.from')}</div>
+                    <div style={{ fontWeight: 800, color: 'var(--secondary)', fontSize: '1.2rem' }}>
+                      {provider.services?.find((item) => item.service_id === service.id)?.custom_price != null
+                        ? `₹${Number(provider.services.find((item) => item.service_id === service.id).custom_price).toLocaleString('en-IN')}`
+                        : t('booking.priceOnRequest')}
+                    </div>
                   </div>
                 </button>
               ))}
@@ -329,7 +350,7 @@ export default function ServiceBookingPage() {
         <div className="card" style={{ padding: '1.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
             <CalendarCheck2 size={18} color="var(--primary)" />
-            <h2 style={{ margin: 0 }}>Book {service.name}</h2>
+            <h2 style={{ margin: 0 }}>{t('booking.bookService', { service: bookingTitle })}</h2>
           </div>
 
           {error && (
@@ -340,28 +361,28 @@ export default function ServiceBookingPage() {
 
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>Customer name</label>
+              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>{t('booking.customerName')}</label>
               <input name="customerFullName" value={form.customerFullName} onChange={handleChange} required minLength={2} />
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>Mobile number</label>
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>{t('booking.phone')}</label>
                 <input name="customerMobile" type="tel" value={form.customerMobile} onChange={handleChange} required minLength={8} />
               </div>
               <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>Email</label>
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>{t('booking.email')}</label>
                 <input name="customerEmail" type="email" value={form.customerEmail} onChange={handleChange} required />
               </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>Booking date</label>
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>{t('booking.date')}</label>
                 <input name="bookingDate" type="date" value={form.bookingDate} onChange={handleChange} required />
               </div>
               <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>Preferred time</label>
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>{t('booking.preferredTime')}</label>
                 <select name="bookingTime" value={form.bookingTime} onChange={handleChange} required>
                   <option value="09:00">09:00 AM</option>
                   <option value="10:00">10:00 AM</option>
@@ -374,19 +395,19 @@ export default function ServiceBookingPage() {
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>Service address</label>
-              <input name="serviceAddress" type="text" value={form.serviceAddress} onChange={handleChange} placeholder="House/Flat number, street, area" required />
+              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>{t('booking.serviceAddress')}</label>
+              <input name="serviceAddress" type="text" value={form.serviceAddress} onChange={handleChange} placeholder={t('booking.addressPlaceholder')} required />
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>Special instructions (optional)</label>
-              <textarea name="specialInstructions" value={form.specialInstructions} onChange={handleChange} rows={3} placeholder="Add notes for the provider" />
+              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.4rem' }}>{t('booking.instructions')}</label>
+              <textarea name="specialInstructions" value={form.specialInstructions} onChange={handleChange} rows={3} placeholder={t('booking.instructionsPlaceholder')} />
             </div>
 
             <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-              <Link to={`/services/${categorySlug}`} className="btn btn-secondary" style={{ flex: 1, justifyContent: 'center' }}>Cancel</Link>
+              <Link to={`/services/${categorySlug}`} className="btn btn-secondary" style={{ flex: 1, justifyContent: 'center' }}>{t('common.cancel')}</Link>
               <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={submitting}>
-                {submitting ? 'Submitting...' : 'Confirm booking'}
+                {submitting ? t('booking.submitting') : t('booking.confirm')}
               </button>
             </div>
           </form>

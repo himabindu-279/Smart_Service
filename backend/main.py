@@ -1,11 +1,15 @@
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.exc import SQLAlchemyError
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.db.init_db import init_db
 from app.api.v1.api import api_router
+from app.services.email_service import process_due_booking_emails
+from app.services.notification_service import process_due_sms_notifications
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -17,13 +21,44 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         init_db(db)
-    except Exception as e:
-        logger.error(f"Error during database initialization: {e}")
+    except Exception:
+        logger.exception("Database initialization failed.")
+        raise
     finally:
         db.close()
+    email_worker = asyncio.create_task(_booking_email_worker())
+    sms_worker = asyncio.create_task(_sms_notification_worker())
     yield
+    email_worker.cancel()
+    sms_worker.cancel()
+    try:
+        await email_worker
+    except asyncio.CancelledError:
+        pass
+    try:
+        await sms_worker
+    except asyncio.CancelledError:
+        pass
     # Shutdown
     logger.info("Shutting down backend...")
+
+
+async def _booking_email_worker():
+    while True:
+        try:
+            await asyncio.to_thread(process_due_booking_emails)
+        except SQLAlchemyError:
+            logger.exception("Booking email outbox polling failed.")
+        await asyncio.sleep(max(5, settings.EMAIL_OUTBOX_POLL_SECONDS))
+
+
+async def _sms_notification_worker():
+    while True:
+        try:
+            await asyncio.to_thread(process_due_sms_notifications)
+        except SQLAlchemyError:
+            logger.exception("SMS notification outbox polling failed.")
+        await asyncio.sleep(max(5, settings.SMS_OUTBOX_POLL_SECONDS))
 
 
 app = FastAPI(

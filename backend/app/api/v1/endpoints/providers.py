@@ -1,7 +1,11 @@
+import logging
 import re
+import uuid
+from pathlib import Path
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.provider import Provider
@@ -13,8 +17,17 @@ from app.models.review import Review
 from app.models.enums import ServiceApprovalStatus, UserRole
 from app.api.deps import get_current_active_user, require_provider
 from app.utils.geo import haversine_distance, geocode_location
+from app.models.provider_document import ProviderDocument
+from app.core.config import settings
 
 router = APIRouter()
+logger = logging.getLogger("uvicorn.error")
+MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
+DOCUMENT_SIGNATURES = {
+    "application/pdf": lambda content: content.startswith(b"%PDF-"),
+    "image/jpeg": lambda content: content.startswith(b"\xff\xd8\xff"),
+    "image/png": lambda content: content.startswith(b"\x89PNG\r\n\x1a\n"),
+}
 
 
 def slugify(text: str) -> str:
@@ -30,13 +43,17 @@ def list_providers(
     query: Optional[str] = None,
     user_lat: Optional[float] = None,
     user_lon: Optional[float] = None,
+    radius_km: Optional[float] = Query(None, gt=0, le=500),
     db: Session = Depends(get_db)
 ):
     """
     List service providers with optional service filtering and distance computation.
     Only returns providers who offer APPROVED and ACTIVE services in the marketplace.
     """
-    q = db.query(Provider).filter(Provider.is_available == True)
+    q = db.query(Provider).filter(
+        Provider.is_available.is_(True),
+        Provider.verification_status == "APPROVED",
+    )
 
     if service_id:
         q = q.join(ProviderService).filter(
@@ -73,6 +90,23 @@ def list_providers(
         if not p_services:
             continue
 
+        distance = None
+        if user_lat is not None and user_lon is not None:
+            covering_services = []
+            for offering, _service in p_services:
+                latitude = offering.service_latitude if offering.service_latitude is not None else p.latitude
+                longitude = offering.service_longitude if offering.service_longitude is not None else p.longitude
+                if latitude is None or longitude is None:
+                    continue
+                distance_for_offer = haversine_distance(user_lat, user_lon, latitude, longitude)
+                max_distance = min(radius_km, offering.service_radius_km) if radius_km is not None else offering.service_radius_km
+                if distance_for_offer <= max_distance:
+                    covering_services.append((offering, _service, distance_for_offer))
+            if not covering_services:
+                continue
+            p_services = [(offering, service) for offering, service, _distance in covering_services]
+            distance = min(distance_for_offer for _, _, distance_for_offer in covering_services)
+
         services_list = [
             {
                 "provider_service_id": ps.id,
@@ -83,18 +117,13 @@ def list_providers(
                 "description": ps.description or s.description,
                 "experience": ps.experience or f"{p.experience_years} years",
                 "service_location": ps.service_location or p.address,
-                "service_radius_km": ps.service_radius_km or 15.0,
-                "availability": ps.availability_hours or "Available Today",
+                "service_radius_km": ps.service_radius_km,
+                "availability": ps.availability_hours,
                 "status": ps.status.value,
                 "image_url": ps.image_url
             }
             for ps, s in p_services
         ]
-
-        # Calculate distance if coordinates provided
-        distance = None
-        if user_lat is not None and user_lon is not None and p.latitude and p.longitude:
-            distance = haversine_distance(user_lat, user_lon, p.latitude, p.longitude)
 
         # Query filter
         if query:
@@ -116,9 +145,10 @@ def list_providers(
             "latitude": p.latitude,
             "longitude": p.longitude,
             "is_verified": p.is_verified,
+            "verification_status": p.verification_status,
             "is_available": p.is_available,
-            "rating_avg": p.rating_avg or 4.5,
-            "total_ratings": p.total_ratings or 1,
+            "rating_avg": p.rating_avg,
+            "total_ratings": p.total_ratings,
             "distance_km": distance,
             "services": services_list
         })
@@ -129,7 +159,10 @@ def list_providers(
 @router.get("/{provider_id}")
 def get_provider_detail(provider_id: int, db: Session = Depends(get_db)):
     """Retrieve full provider profile details with offered services and reviews."""
-    provider = db.query(Provider).filter(Provider.id == provider_id).first()
+    provider = db.query(Provider).filter(
+        Provider.id == provider_id,
+        Provider.verification_status == "APPROVED",
+    ).first()
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
 
@@ -157,6 +190,8 @@ def get_provider_detail(provider_id: int, db: Session = Depends(get_db)):
             "experience": ps.experience,
             "service_location": ps.service_location,
             "service_radius_km": ps.service_radius_km,
+            "service_latitude": ps.service_latitude,
+            "service_longitude": ps.service_longitude,
             "availability": ps.availability_hours,
             "estimated_duration_minutes": s.estimated_duration_minutes,
             "image_url": ps.image_url
@@ -190,10 +225,12 @@ def get_provider_detail(provider_id: int, db: Session = Depends(get_db)):
         "address": provider.address,
         "latitude": provider.latitude,
         "longitude": provider.longitude,
+        "service_radius_km": provider.service_radius_km,
         "is_verified": provider.is_verified,
+        "verification_status": provider.verification_status,
         "is_available": provider.is_available,
-        "rating_avg": provider.rating_avg or 4.8,
-        "total_ratings": provider.total_ratings or 24,
+        "rating_avg": provider.rating_avg,
+        "total_ratings": provider.total_ratings,
         "services": services_list,
         "reviews": reviews_list
     }
@@ -206,11 +243,12 @@ def get_provider_detail(provider_id: int, db: Session = Depends(get_db)):
 class ProviderProfileUpdate(BaseModel):
     business_name: Optional[str] = None
     bio: Optional[str] = None
-    experience_years: Optional[int] = None
+    experience_years: Optional[int] = Field(default=None, ge=0, le=80)
     qualifications: Optional[str] = None
     address: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    service_radius_km: Optional[float] = Field(default=None, gt=0, le=200)
     is_available: Optional[bool] = None
 
 
@@ -223,7 +261,9 @@ class PublishServiceRequest(BaseModel):
     experience: Optional[str] = None
     base_price: float = Field(..., gt=0)
     service_location: Optional[str] = None
-    service_radius: Optional[float] = 15.0
+    service_radius: Optional[float] = Field(default=15.0, gt=0, le=200)
+    service_latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    service_longitude: Optional[float] = Field(default=None, ge=-180, le=180)
     availability: Optional[str] = "Monday - Saturday, 9:00 AM - 7:00 PM"
     image_url: Optional[str] = None
     is_active: Optional[bool] = True
@@ -261,6 +301,8 @@ def get_my_provider_profile(
             "experience": ps.experience,
             "service_location": ps.service_location or provider.address,
             "service_radius": ps.service_radius_km,
+            "service_latitude": ps.service_latitude,
+            "service_longitude": ps.service_longitude,
             "availability": ps.availability_hours,
             "status": ps.status.value,
             "is_active": ps.is_active,
@@ -270,6 +312,7 @@ def get_my_provider_profile(
         }
         for ps, s in p_services
     ]
+    latest_review = provider.verification_history[0] if provider.verification_history else None
 
     return {
         "id": provider.id,
@@ -285,6 +328,9 @@ def get_my_provider_profile(
         "latitude": provider.latitude,
         "longitude": provider.longitude,
         "is_verified": provider.is_verified,
+        "verification_status": provider.verification_status,
+        "verification_reason": latest_review.reason if latest_review else None,
+        "verification_reviewed_at": latest_review.created_at.isoformat() if latest_review else None,
         "is_available": provider.is_available,
         "rating_avg": provider.rating_avg,
         "total_ratings": provider.total_ratings,
@@ -304,17 +350,24 @@ def update_my_provider_profile(
         raise HTTPException(status_code=404, detail="Provider profile not found.")
 
     profile_data = profile_in.model_dump(exclude_unset=True)
+    if ("latitude" in profile_data) != ("longitude" in profile_data):
+        raise HTTPException(status_code=422, detail="Latitude and longitude must be provided together.")
+    if profile_data.get("is_available") and provider.verification_status != "APPROVED":
+        raise HTTPException(status_code=403, detail="Only approved providers can accept bookings.")
     if "address" in profile_data and profile_data["address"]:
-        matches = geocode_location(profile_data["address"])
-        if not matches:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="We could not find that service location. Choose a recognized city or area.",
-            )
-        location = matches[0]
-        profile_data["address"] = location["display_name"]
-        profile_data["latitude"] = location["latitude"]
-        profile_data["longitude"] = location["longitude"]
+        if profile_data.get("latitude") is not None and profile_data.get("longitude") is not None:
+            profile_data["address"] = profile_data["address"].strip()
+        else:
+            matches = geocode_location(profile_data["address"])
+            if not matches:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="We could not find that service location. Choose a recognized city or area.",
+                )
+            location = matches[0]
+            profile_data["address"] = location["display_name"]
+            profile_data["latitude"] = location["latitude"]
+            profile_data["longitude"] = location["longitude"]
 
     for field, val in profile_data.items():
         setattr(provider, field, val)
@@ -322,6 +375,102 @@ def update_my_provider_profile(
     db.commit()
     db.refresh(provider)
     return {"message": "Provider profile updated successfully", "provider_id": provider.id}
+
+
+@router.get("/me/documents")
+def get_my_provider_documents(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    provider = db.query(Provider).filter(Provider.user_id == current_user.id).first()
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider profile not found.")
+    documents = db.query(ProviderDocument).filter(
+        ProviderDocument.provider_id == provider.id
+    ).order_by(ProviderDocument.created_at.desc()).all()
+    return [
+        {
+            "id": document.id,
+            "document_type": document.document_type,
+            "original_filename": document.original_filename,
+            "created_at": document.created_at.isoformat(),
+        }
+        for document in documents
+    ]
+
+
+@router.post("/me/documents", status_code=status.HTTP_201_CREATED)
+async def upload_provider_document(
+    document_type: str = Form(...),
+    upload: UploadFile = File(...),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != UserRole.PROVIDER or not current_user.email_verified_at:
+        raise HTTPException(status_code=403, detail="A verified provider account is required.")
+    document_type = document_type.strip().upper()
+    if document_type not in {"IDENTITY", "SERVICE_QUALIFICATION"}:
+        raise HTTPException(status_code=422, detail="Document type must be IDENTITY or SERVICE_QUALIFICATION.")
+    provider = db.query(Provider).filter(Provider.user_id == current_user.id).first()
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider profile not found.")
+    if provider.verification_status not in {"PENDING", "REJECTED"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Only pending or rejected providers can update verification documents.",
+        )
+
+    content = await upload.read(MAX_DOCUMENT_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="The uploaded document is empty.")
+    if len(content) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(status_code=413, detail="Each document must be 8 MB or smaller.")
+    detected_type = next(
+        (mime for mime, matches in DOCUMENT_SIGNATURES.items() if matches(content)),
+        None,
+    )
+    if not detected_type or (upload.content_type not in (detected_type, "application/octet-stream")):
+        raise HTTPException(status_code=415, detail="Upload a valid PDF, JPEG, or PNG document.")
+
+    suffix = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".png"}[detected_type]
+    storage_name = f"{uuid.uuid4().hex}{suffix}"
+    safe_name = (upload.filename or "document").replace("\\", "/").split("/")[-1]
+    safe_name = "".join(char for char in safe_name if char.isprintable())[:255] or "document"
+    storage_dir = Path(settings.PRIVATE_UPLOAD_DIR).resolve()
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    target_path = (storage_dir / storage_name).resolve()
+    if target_path.parent != storage_dir:
+        raise HTTPException(status_code=400, detail="Invalid document filename.")
+
+    existing = db.query(ProviderDocument).filter(
+        ProviderDocument.provider_id == provider.id,
+        ProviderDocument.document_type == document_type,
+    ).first()
+    previous_name = existing.storage_name if existing else None
+    try:
+        with target_path.open("xb") as target:
+            target.write(content)
+        if existing:
+            existing.original_filename = safe_name
+            existing.content_type = detected_type
+            existing.storage_name = storage_name
+        else:
+            db.add(ProviderDocument(
+                provider_id=provider.id,
+                document_type=document_type,
+                original_filename=safe_name,
+                content_type=detected_type,
+                storage_name=storage_name,
+            ))
+        db.commit()
+    except (OSError, SQLAlchemyError):
+        db.rollback()
+        target_path.unlink(missing_ok=True)
+        logger.exception("Private provider document could not be stored")
+        raise HTTPException(status_code=500, detail="The document could not be saved. Please try again.")
+    if previous_name:
+        (storage_dir / previous_name).unlink(missing_ok=True)
+    return {"document_type": document_type, "original_filename": safe_name, "message": "Document uploaded privately."}
 
 
 @router.get("/me/services")
@@ -379,50 +528,44 @@ def publish_provider_service(
     provider = db.query(Provider).filter(Provider.user_id == current_user.id).first()
     if not provider:
         raise HTTPException(status_code=404, detail="Provider profile not found. Please complete provider onboarding.")
+    if provider.verification_status != "APPROVED":
+        raise HTTPException(status_code=403, detail="Provider verification is required before publishing services.")
 
     # 1. Resolve Category
     category = None
     if svc_in.category_id:
         category = db.query(Category).filter(Category.id == svc_in.category_id).first()
+        if not category:
+            raise HTTPException(status_code=422, detail="The selected service category does not exist.")
     elif svc_in.category_name:
         category = db.query(Category).filter(Category.name.ilike(f"%{svc_in.category_name}%")).first()
-
-    if not category:
-        category = db.query(Category).first()
 
     # 2. Resolve Service
     service = None
     if svc_in.service_id:
-        service = db.query(Service).filter(Service.id == svc_in.service_id).first()
+        service = db.query(Service).filter(
+            Service.id == svc_in.service_id,
+            Service.is_active.is_(True),
+        ).first()
     else:
-        # Match by name or create service in database
         clean_name = svc_in.service_name.strip()
-        service = db.query(Service).filter(Service.name.ilike(clean_name)).first()
-        if not service:
-            base_slug = slugify(clean_name)
-            slug = base_slug
-            idx = 1
-            while db.query(Service).filter(Service.slug == slug).first():
-                slug = f"{base_slug}-{idx}"
-                idx += 1
+        service = db.query(Service).filter(
+            Service.name.ilike(clean_name),
+            Service.is_active.is_(True),
+        ).first()
+    if not service:
+        raise HTTPException(status_code=422, detail="Choose a service from the marketplace catalog.")
+    if category and category.id != service.category_id:
+        raise HTTPException(status_code=422, detail="The selected service does not belong to that category.")
+    category = service.category
 
-            service = Service(
-                category_id=category.id if category else 1,
-                name=clean_name,
-                slug=slug,
-                description=svc_in.description or f"Professional {clean_name} services.",
-                base_price=svc_in.base_price,
-                estimated_duration_minutes=60,
-                is_active=True
-            )
-            db.add(service)
-            db.commit()
-            db.refresh(service)
-
-    # Resolve the provider's service location once and keep the provider
-    # coordinates aligned with the location customers search.
+    # Each offering owns its coverage point; it must not silently move the provider profile.
     service_location = svc_in.service_location or provider.address
-    if service_location:
+    service_latitude = svc_in.service_latitude
+    service_longitude = svc_in.service_longitude
+    if (service_latitude is None) != (service_longitude is None):
+        raise HTTPException(status_code=422, detail="Service latitude and longitude must be provided together.")
+    if service_location and service_latitude is None:
         matches = geocode_location(service_location)
         if not matches:
             raise HTTPException(
@@ -431,9 +574,12 @@ def publish_provider_service(
             )
         location = matches[0]
         service_location = location["display_name"]
-        provider.address = service_location
-        provider.latitude = location["latitude"]
-        provider.longitude = location["longitude"]
+        service_latitude = location["latitude"]
+        service_longitude = location["longitude"]
+    elif service_location:
+        service_location = service_location.strip()
+    if not service_location or service_latitude is None or service_longitude is None:
+        raise HTTPException(status_code=422, detail="Set an address and map location for this service.")
 
     # 3. Add or update ProviderService record
     existing_ps = db.query(ProviderService).filter(
@@ -443,16 +589,18 @@ def publish_provider_service(
 
     if existing_ps:
         existing_ps.custom_price = svc_in.base_price
-        existing_ps.custom_service_name = svc_in.service_name
+        existing_ps.custom_service_name = service.name
         existing_ps.description = svc_in.description
         existing_ps.experience = svc_in.experience
         existing_ps.service_location = service_location
-        existing_ps.service_radius_km = svc_in.service_radius or 15.0
+        existing_ps.service_latitude = service_latitude
+        existing_ps.service_longitude = service_longitude
+        existing_ps.service_radius_km = svc_in.service_radius
         existing_ps.availability_hours = svc_in.availability
         existing_ps.image_url = svc_in.image_url
-        existing_ps.category_id = category.id if category else service.category_id
+        existing_ps.category_id = category.id
         existing_ps.status = ServiceApprovalStatus.PENDING  # Reset to PENDING for review
-        existing_ps.is_active = svc_in.is_active if svc_in.is_active is not None else True
+        existing_ps.is_active = False
         existing_ps.rejection_reason = None
         db.commit()
         db.refresh(existing_ps)
@@ -461,17 +609,19 @@ def publish_provider_service(
         ps_record = ProviderService(
             provider_id=provider.id,
             service_id=service.id,
-            category_id=category.id if category else service.category_id,
-            custom_service_name=svc_in.service_name,
+            category_id=category.id,
+            custom_service_name=service.name,
             custom_price=svc_in.base_price,
             description=svc_in.description,
             experience=svc_in.experience,
             service_location=service_location,
-            service_radius_km=svc_in.service_radius or 15.0,
+            service_latitude=service_latitude,
+            service_longitude=service_longitude,
+            service_radius_km=svc_in.service_radius,
             availability_hours=svc_in.availability,
             image_url=svc_in.image_url,
             status=ServiceApprovalStatus.PENDING,
-            is_active=svc_in.is_active if svc_in.is_active is not None else True
+            is_active=False
         )
         db.add(ps_record)
         db.commit()
@@ -503,6 +653,8 @@ def toggle_provider_service_active(
     ).first()
     if not ps:
         raise HTTPException(status_code=404, detail="Service offering not found.")
+    if provider.verification_status != "APPROVED" or ps.status != ServiceApprovalStatus.APPROVED:
+        raise HTTPException(status_code=403, detail="Only approved providers can activate approved service offers.")
 
     ps.is_active = not ps.is_active
     db.commit()

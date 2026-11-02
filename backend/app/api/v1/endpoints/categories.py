@@ -36,7 +36,11 @@ def get_categories_with_services(
         .filter(
             Service.is_active == True,
             (ProviderService.id == None)
-            | ((Provider.is_available == True) & (User.is_active == True)),
+            | (
+                (Provider.is_available == True)
+                & (Provider.verification_status == "APPROVED")
+                & (User.is_active == True)
+            ),
         )
         .group_by(Service.id)
         .all()

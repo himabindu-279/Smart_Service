@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { useI18n } from '../context/I18nContext';
 import { ArrowRight, Bot, Edit3, Menu, MessageSquare, MoreVertical, Plus, Send, ShieldCheck, Sparkles, Trash2, User, X } from 'lucide-react';
 
 const welcomeMessage = { role: 'assistant', content: 'Hi, I can help identify the right marketplace service, explain what to expect, and find providers near your saved location.', suggested_service: null, providers: [], actions: [] };
@@ -12,6 +13,7 @@ function formatTime(value) {
 }
 
 export default function AIAssistant() {
+  const { t } = useI18n();
   const { user, logout } = useAuth();
   const [conversations, setConversations] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -127,27 +129,27 @@ export default function AIAssistant() {
   return (
     <div className="assistant-shell">
       <aside className={`assistant-history ${mobileHistoryOpen ? 'assistant-history-open' : ''}`}>
-        <div className="assistant-history-header"><div className="assistant-brand"><span className="assistant-brand-mark"><Bot size={19} /></span><strong>Service guide</strong></div><button className="assistant-icon-button mobile-only" onClick={() => setMobileHistoryOpen(false)} aria-label="Close chat history"><X size={18} /></button></div>
-        <button className="assistant-new-chat" onClick={createConversation}><Plus size={17} /> New chat</button>
-        <div className="assistant-history-label">Your conversations</div>
+        <div className="assistant-history-header"><div className="assistant-brand"><span className="assistant-brand-mark"><Bot size={19} /></span><strong>{t('chat.guide')}</strong></div><button className="assistant-icon-button mobile-only" onClick={() => setMobileHistoryOpen(false)} aria-label={t('chat.closeHistory')}><X size={18} /></button></div>
+        <button className="assistant-new-chat" onClick={createConversation}><Plus size={17} /> {t('chat.newChat')}</button>
+        <div className="assistant-history-label">{t('chat.conversations')}</div>
         <div className="assistant-conversation-list">
           {conversations.map((conversation) => <div className={`assistant-conversation ${conversation.id === activeId ? 'active' : ''}`} key={conversation.id}><button onClick={() => selectConversation(conversation.id)}><MessageSquare size={16} /><span>{conversation.title}</span></button><div className="assistant-conversation-actions"><button onClick={() => renameConversation(conversation)} aria-label="Rename conversation"><Edit3 size={14} /></button><button onClick={() => deleteConversation(conversation)} aria-label="Delete conversation"><Trash2 size={14} /></button></div></div>)}
-          {!conversations.length && !pageLoading && <p className="assistant-empty-history">Your saved chats will appear here.</p>}
+          {!conversations.length && !pageLoading && <p className="assistant-empty-history">{t('chat.savedChats')}</p>}
         </div>
-        <div className="assistant-account"><div className="assistant-account-avatar"><User size={17} /></div><div><strong>{user?.full_name || 'Account'}</strong><span>{user?.email}</span></div><button onClick={logout} aria-label="Log out" title="Log out"><MoreVertical size={17} /></button></div>
+        <div className="assistant-account"><div className="assistant-account-avatar"><User size={17} /></div><div><strong>{user?.full_name || t('common.account')}</strong><span>{user?.email}</span></div><button onClick={logout} aria-label={t('chat.logout')} title={t('chat.logout')}><MoreVertical size={17} /></button></div>
       </aside>
 
       <main className="assistant-main">
-        <header className="assistant-topbar"><button className="assistant-icon-button mobile-only" onClick={() => setMobileHistoryOpen(true)} aria-label="Open chat history"><Menu size={20} /></button><div><h1>{activeConversation?.title || 'New conversation'}</h1><span>Grounded in the live marketplace catalog</span></div><Sparkles size={19} color="var(--primary)" /></header>
+        <header className="assistant-topbar"><button className="assistant-icon-button mobile-only" onClick={() => setMobileHistoryOpen(true)} aria-label={t('chat.openHistory')}><Menu size={20} /></button><div><h1>{activeConversation?.title || t('chat.newConversation')}</h1><span>{t('chat.grounded')}</span></div><Sparkles size={19} color="var(--primary)" /></header>
         <section className="assistant-messages" aria-live="polite">
-          {pageLoading && <div className="assistant-status">Loading your conversations...</div>}
-          {!pageLoading && !messages.length && <div className="assistant-welcome"><Bot size={32} /><h2>What can we solve today?</h2><p>Describe a service need and I will search the real marketplace catalog for relevant options.</p></div>}
-          {messages.map((message, index) => <div className={`assistant-message-row ${message.role}`} key={message.id || `${message.role}-${index}`}><div className="assistant-message-avatar">{message.role === 'assistant' ? <Bot size={16} /> : <User size={16} />}</div><div className="assistant-message-content"><div className="assistant-message-meta"><strong>{message.role === 'assistant' ? 'Service guide' : 'You'}</strong><span>{formatTime(message.created_at)}</span></div><div className="assistant-message-text">{message.content}</div>{message.suggested_service && <div className="assistant-service-result"><strong>{message.suggested_service.name}</strong><span>{message.suggested_service.category} · from ₹{message.suggested_service.base_price}</span></div>}{message.providers?.length > 0 && <div className="assistant-provider-list">{message.providers.map((provider) => <div className="assistant-provider" key={provider.id}><div><strong>{provider.business_name}</strong>{provider.is_verified && <ShieldCheck size={14} color="var(--primary)" />}<span>★ {provider.rating || 'New'} · ₹{provider.price || 'Quote'}</span></div><Link to={`/providers/${provider.id}?book=true`} className="btn btn-primary btn-sm">Book <ArrowRight size={13} /></Link></div>)}</div>}{message.actions?.length > 0 && <div className="assistant-actions">{message.actions.map((action) => <Link key={action.path} to={action.path} className="btn btn-secondary btn-sm">{action.label} <ArrowRight size={13} /></Link>)}</div>}</div></div>)}
-          {loading && <div className="assistant-typing"><Sparkles size={16} className="animate-spin" /> Searching verified marketplace options...</div>}
-          {error && <div className="assistant-error">{error} <button className="btn btn-secondary btn-sm" onClick={() => retryPayload && handleSend(retryPayload.message, retryPayload.clientMessageId)} disabled={loading}>Retry</button></div>}
+          {pageLoading && <div className="assistant-status">{t('chat.loading')}</div>}
+          {!pageLoading && !messages.length && <div className="assistant-welcome"><Bot size={32} /><h2>{t('chat.welcome')}</h2><p>{t('chat.welcomeDescription')}</p></div>}
+          {messages.map((message, index) => <div className={`assistant-message-row ${message.role}`} key={message.id || `${message.role}-${index}`}><div className="assistant-message-avatar">{message.role === 'assistant' ? <Bot size={16} /> : <User size={16} />}</div><div className="assistant-message-content"><div className="assistant-message-meta"><strong>{message.role === 'assistant' ? t('chat.guide') : t('chat.you')}</strong><span>{formatTime(message.created_at)}</span></div><div className="assistant-message-text">{message.content}</div>{message.suggested_service && <div className="assistant-service-result"><strong>{message.suggested_service.name}</strong><span>{message.suggested_service.category} · from ₹{message.suggested_service.base_price}</span></div>}{message.providers?.length > 0 && <div className="assistant-provider-list">{message.providers.map((provider) => <div className="assistant-provider" key={provider.id}><div><strong>{provider.business_name}</strong>{provider.is_verified && <ShieldCheck size={14} color="var(--primary)" />}<span>★ {provider.rating || 'New'} · ₹{provider.price || 'Quote'}</span></div><Link to={`/providers/${provider.id}?book=true`} className="btn btn-primary btn-sm">{t('chat.book')} <ArrowRight size={13} /></Link></div>)}</div>}{message.actions?.length > 0 && <div className="assistant-actions">{message.actions.map((action) => <Link key={action.path} to={action.path} className="btn btn-secondary btn-sm">{action.label} <ArrowRight size={13} /></Link>)}</div>}</div></div>)}
+          {loading && <div className="assistant-typing"><Sparkles size={16} className="animate-spin" /> {t('chat.searching')}</div>}
+          {error && <div className="assistant-error">{error} <button className="btn btn-secondary btn-sm" onClick={() => retryPayload && handleSend(retryPayload.message, retryPayload.clientMessageId)} disabled={loading}>{t('common.retry')}</button></div>}
           <div ref={messagesEndRef} />
         </section>
-        <div className="assistant-composer-wrap"><div className="assistant-composer-hint">Ask about repairs, care, food, education, or vehicle services</div><form className="assistant-composer" onSubmit={(event) => { event.preventDefault(); handleSend(); }}><input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Message the service guide..." disabled={loading} /><button className="btn btn-primary" disabled={loading || !input.trim()} aria-label="Send message"><Send size={17} /></button></form></div>
+        <div className="assistant-composer-wrap"><div className="assistant-composer-hint">{t('chat.askAbout')}</div><form className="assistant-composer" onSubmit={(event) => { event.preventDefault(); handleSend(); }}><input value={input} onChange={(event) => setInput(event.target.value)} placeholder={t('chat.placeholder')} disabled={loading} /><button className="btn btn-primary" disabled={loading || !input.trim()} aria-label={t('common.send')}><Send size={17} /></button></form></div>
       </main>
     </div>
   );

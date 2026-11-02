@@ -17,6 +17,8 @@ class ProviderService(Base):
     experience = Column(String(100), nullable=True)
     custom_price = Column(Float, nullable=False, default=0.0)
     service_location = Column(String(255), nullable=True)
+    service_latitude = Column(Float, nullable=True)
+    service_longitude = Column(Float, nullable=True)
     service_radius_km = Column(Float, default=15.0)
     availability_hours = Column(String(255), nullable=True)
     image_url = Column(String(500), nullable=True)

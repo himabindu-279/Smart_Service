@@ -179,6 +179,9 @@ Copy the configuration template:
 ```bash
 cp .env.example .env
 ```
+Set `FIRST_SUPERUSER_EMAIL` and a unique `FIRST_SUPERUSER_PASSWORD`; production startup
+refuses to run without them and a `SECRET_KEY` of at least 32 characters. `SEED_DEMO_DATA`
+defaults to `False`; enable it only for an isolated local demo database.
 Update your `.env` file with your PostgreSQL connection string:
 ```ini
 DATABASE_URL="postgresql://postgres:your_password@localhost:5432/smart_marketplace"
@@ -214,22 +217,42 @@ Once started, access:
 
 ---
 
-## 🧪 Pre-Seeded Accounts for Testing
+## Provider Verification and Booking Email
 
-| Role | Email | Password | Details |
-|---|---|---|---|
-| **ADMIN** | `admin@marketplace.com` | `AdminPassword123!` | System Administrator |
-| **PROVIDER** | `provider@marketplace.com` | `ProviderPassword123!` | Ravi Kumar (AC Repair specialist) |
-| **USER** | `user@marketplace.com` | `UserPassword123!` | Alex Johnson (Regular customer) |
+Provider registration requires an email verification code, a phone number, a saved
+service location, at least one catalog service, and private identity and qualification
+documents. Configure backend SMTP settings (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`,
+`SMTP_PASSWORD`, and `SMTP_FROM`) to send provider verification codes and booking
+status notifications. Booking status changes are committed before email delivery; failed
+booking emails remain in the database outbox for retry.
+
+Set `PRIVATE_UPLOAD_DIR` to a private persistent backend volume in production. Do not
+place provider documents under `frontend/public` or any static-file directory. Existing
+databases are extended with additive startup migrations; the initialization code does
+not drop existing tables or data. Back up the database before deploying schema changes.
+
+Discover problem photos are limited to JPG, PNG, or WebP files up to 5 MB and are stored
+under the private upload directory. A photo is sent to the configured LLM provider only
+when `LLM_API_KEY` is configured; without it, text-based service analysis still works and
+the UI explains that image analysis is unavailable. Voice input uses the browser's
+SpeechRecognition implementation when supported.
+
+In-app notifications are stored in the `notifications` table and are available through
+`GET /api/notifications`, `PATCH /api/notifications/{id}/read`, and
+`PATCH /api/notifications/read-all`. SMS delivery is asynchronous and retries failed
+Twilio requests. Set `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`,
+`TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER` to enable it; without these values, SMS
+events remain queued and are not reported as delivered.
 
 ---
 
 ## 🚦 Running Automated Tests
 Run the test suite using `pytest`:
 ```bash
-python -m pytest tests/test_phase1.py -v
+python -m pytest tests/test_phase1.py backend/tests -v
 ```
-All 8 automated test suites verify database initialization, registration flows, authentication edge cases, and role restrictions.
+The workflow tests use an isolated in-memory SQLite database and cover provider onboarding,
+admin review permissions, Rajam service-radius matching, and booking-email outbox behavior.
 
 ## ☁️ Deployment
 
@@ -252,8 +275,10 @@ and heavyweight ML dependencies.
 ### Deploy the backend
 
 Deploy the `backend/` directory using the provider's FastAPI/Python service
-workflow. Configure a production database URL, a long random `SECRET_KEY`,
-the required LLM and SMTP variables, and CORS with the exact Vercel domain:
+workflow. Configure `DATABASE_URL`, a random `SECRET_KEY` (at least 32 characters),
+`FIRST_SUPERUSER_EMAIL`, `FIRST_SUPERUSER_PASSWORD`, SMTP credentials, and
+`PRIVATE_UPLOAD_DIR` on a persistent private volume. Keep demo seeding disabled.
+Set CORS to the exact Vercel domain (no trailing slash):
 ```ini
 CORS_ORIGINS=https://<your-vercel-domain>
 ```

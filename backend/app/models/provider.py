@@ -17,7 +17,9 @@ class Provider(Base):
     address = Column(String(500), nullable=True)
     latitude = Column(Float, nullable=True, index=True)
     longitude = Column(Float, nullable=True, index=True)
+    service_radius_km = Column(Float, default=15.0, nullable=False)
     is_verified = Column(Boolean, default=False, nullable=False)
+    verification_status = Column(String(20), default="PENDING", nullable=False, index=True)
     is_available = Column(Boolean, default=True, nullable=False)
     rating_avg = Column(Float, default=0.0, nullable=False)
     total_ratings = Column(Integer, default=0, nullable=False)
@@ -36,3 +38,10 @@ class Provider(Base):
     bookings = relationship("Booking", back_populates="provider", cascade="all, delete-orphan")
     reviews = relationship("Review", back_populates="provider", cascade="all, delete-orphan")
     ratings = relationship("Rating", back_populates="provider", cascade="all, delete-orphan")
+    verification_history = relationship(
+        "ProviderVerification",
+        back_populates="provider",
+        cascade="all, delete-orphan",
+        order_by="ProviderVerification.created_at.desc()",
+    )
+    documents = relationship("ProviderDocument", back_populates="provider", cascade="all, delete-orphan")

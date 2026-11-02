@@ -16,8 +16,9 @@ class BookingBase(BaseModel):
     service_address: str = Field(min_length=5, max_length=500)
     address: Optional[str] = None
     provider_service_id: Optional[int] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    problem_image_id: Optional[int] = Field(default=None, gt=0)
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
     special_instructions: Optional[str] = None
     notes: Optional[str] = None
     estimated_price: Optional[float] = None
@@ -63,6 +64,8 @@ class BookingBase(BaseModel):
 
     @model_validator(mode="after")
     def validate_future_slot(self):
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("Latitude and longitude must be provided together")
         requested = datetime.combine(self.booking_date, self.booking_time)
         local_now = datetime.now().astimezone().replace(tzinfo=None)
         if requested <= local_now:
@@ -76,6 +79,7 @@ class BookingCreate(BookingBase):
 
 class BookingUpdateStatus(BaseModel):
     status: BookingStatus
+    reason: Optional[str] = Field(default=None, max_length=1000)
 
 
 class BookingResponse(BaseModel):

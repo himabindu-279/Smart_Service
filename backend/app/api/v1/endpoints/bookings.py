@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, time, timedelta
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.booking import Booking
@@ -16,6 +17,8 @@ from app.models.email_notification import EmailNotification
 from app.schemas.booking import BookingCreate, BookingUpdateStatus
 from app.api.deps import get_current_active_user, require_admin
 from app.services.email_service import EmailService
+from app.services.order_service import refresh_order_status
+from app.services.notification_service import NotificationService
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
@@ -46,11 +49,13 @@ def create_booking(
     db: Session = Depends(get_db)
 ):
     """Create a new service booking with double-booking prevention and provider availability check."""
+    if current_user.role == UserRole.PROVIDER:
+        raise HTTPException(status_code=403, detail="Provider accounts cannot create customer bookings.")
     provider = db.query(Provider).filter(Provider.id == booking_in.provider_id).with_for_update().first()
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
 
-    if not provider.is_available:
+    if provider.verification_status != "APPROVED" or not provider.is_available:
         raise HTTPException(
             status_code=400,
             detail="The selected provider is currently not available for bookings."
@@ -76,6 +81,21 @@ def create_booking(
             status_code=400,
             detail="This provider does not offer the selected service. Please choose another provider."
         )
+    if booking_in.latitude is not None and booking_in.longitude is not None:
+        from app.utils.geo import haversine_distance
+
+        service_latitude = ps.service_latitude if ps.service_latitude is not None else provider.latitude
+        service_longitude = ps.service_longitude if ps.service_longitude is not None else provider.longitude
+        if service_latitude is None or service_longitude is None:
+            raise HTTPException(status_code=409, detail="The provider has no saved service coverage coordinates.")
+        actual_distance = haversine_distance(
+            booking_in.latitude,
+            booking_in.longitude,
+            service_latitude,
+            service_longitude,
+        )
+        if actual_distance > ps.service_radius_km:
+            raise HTTPException(status_code=400, detail="The booking address is outside this service's coverage area.")
 
     if booking_in.customer_email and current_user.email.casefold() != str(booking_in.customer_email).casefold():
         raise HTTPException(status_code=400, detail="Contact email must match the signed-in account.")
@@ -130,7 +150,7 @@ def create_booking(
             detail="The selected provider is already booked for this date and time slot. Please choose another slot."
         )
 
-    total_amount = ps.custom_price if ps.custom_price is not None else service.base_price
+    total_amount = ps.custom_price
     booking_ref = f"BK-{uuid.uuid4().hex[:8].upper()}"
 
     booking = Booking(
@@ -148,30 +168,32 @@ def create_booking(
         longitude=booking_in.longitude,
         special_instructions=booking_in.special_instructions
     )
+    if booking_in.problem_image_id:
+        from app.models.problem_image import ProblemImage
+
+        problem_image = db.query(ProblemImage).filter(
+            ProblemImage.id == booking_in.problem_image_id,
+            ProblemImage.user_id == current_user.id,
+        ).first()
+        if not problem_image:
+            raise HTTPException(status_code=404, detail="Uploaded problem image not found.")
+        booking.problem_image_id = problem_image.id
     if booking_in.customer_full_name:
         current_user.full_name = booking_in.customer_full_name
     if booking_in.customer_mobile:
         current_user.phone = booking_in.customer_mobile
     db.add(booking)
     try:
+        db.flush()
+        NotificationService.booking_created(db, booking)
         db.commit()
         db.refresh(booking)
-    except Exception:
+    except SQLAlchemyError:
         db.rollback()
         logger.exception("Booking persistence failed")
         raise HTTPException(status_code=500, detail="The booking could not be saved. Please retry.")
 
-    email_status = "FAILED"
-    try:
-        email_notification = EmailService.send_booking_email(
-            db=db, booking=booking, notification_type=NotificationType.BOOKING_CREATED
-        )
-        email_status = email_notification.sent_status
-    except Exception:
-        db.rollback()
-        logger.warning("Booking saved, but its confirmation notification could not be recorded.")
-
-    return _booking_response(booking, email_status)
+    return _booking_response(booking)
 
 
 @router.get("/my")
@@ -241,6 +263,7 @@ def get_provider_bookings(
             "total_amount": b.total_amount,
             "service_address": b.service_address,
             "special_instructions": b.special_instructions,
+            "problem_image_url": f"/ai/problem-images/{b.problem_image_id}" if b.problem_image_id else None,
             "created_at": b.created_at.isoformat()
         })
     return results
@@ -269,32 +292,71 @@ def update_booking_status(
 
     old_status = booking.status
     new_status = status_update.status
-    booking.status = new_status
-    db.commit()
-    db.refresh(booking)
+    if old_status == new_status:
+        return {
+            "id": booking.id,
+            "booking_reference": booking.booking_reference,
+            "status": booking.status.value,
+            "message": "Booking status is unchanged.",
+            "email_notified": False,
+            "email_status": None,
+        }
+    allowed_transitions = {
+        BookingStatus.PENDING: {BookingStatus.ACCEPTED, BookingStatus.REJECTED, BookingStatus.CANCELLED},
+        BookingStatus.ACCEPTED: {BookingStatus.IN_PROGRESS, BookingStatus.CANCELLED},
+        BookingStatus.IN_PROGRESS: {BookingStatus.COMPLETED, BookingStatus.CANCELLED},
+    }
+    if new_status not in allowed_transitions.get(old_status, set()):
+        raise HTTPException(status_code=409, detail=f"Cannot change booking from {old_status.value} to {new_status.value}.")
+    if is_owner and not is_admin and new_status != BookingStatus.CANCELLED:
+        raise HTTPException(status_code=403, detail="Customers can only cancel their own bookings.")
+    if new_status == BookingStatus.REJECTED and not (is_assigned_provider or is_admin):
+        raise HTTPException(status_code=403, detail="Only the assigned provider or an administrator can reject a booking.")
+    if new_status == BookingStatus.ACCEPTED:
+        provider = booking.provider
+        if provider.verification_status != "APPROVED" or not provider.is_available:
+            raise HTTPException(status_code=403, detail="Only available, approved providers can accept bookings.")
 
-    # Automated real email notification events (Section 8 & 9)
-    email_notification = None
-    if new_status == BookingStatus.ACCEPTED and old_status != BookingStatus.ACCEPTED:
-        email_notification = EmailService.send_booking_email(
-            db=db, booking=booking, notification_type=NotificationType.BOOKING_CONFIRMED
-        )
-    elif new_status == BookingStatus.REJECTED and old_status != BookingStatus.REJECTED:
-        email_notification = EmailService.send_booking_email(
-            db=db, booking=booking, notification_type=NotificationType.BOOKING_REJECTED
-        )
-    elif new_status == BookingStatus.CANCELLED and old_status != BookingStatus.CANCELLED:
-        email_notification = EmailService.send_booking_email(
-            db=db, booking=booking, notification_type=NotificationType.BOOKING_CANCELLED
-        )
+    booking.status = new_status
+    refresh_order_status(db, booking.order_id)
+    notification_type = {
+        BookingStatus.ACCEPTED: NotificationType.BOOKING_CONFIRMED,
+        BookingStatus.REJECTED: NotificationType.BOOKING_REJECTED,
+        BookingStatus.CANCELLED: NotificationType.BOOKING_CANCELLED,
+    }.get(new_status)
+    outbox_event = None
+    try:
+        if notification_type:
+            outbox_event = EmailService.enqueue_booking_status_email(
+                db,
+                booking,
+                notification_type,
+                status_update.reason,
+            )
+            NotificationService.booking_status_changed(
+                db,
+                booking,
+                new_status,
+                status_update.reason,
+            )
+        db.commit()
+        db.refresh(booking)
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Booking status update could not be persisted.")
+        raise HTTPException(status_code=500, detail="The booking status could not be updated.")
+
+    email_status = None
+    if outbox_event:
+        email_status = EmailService.deliver_outbox_event(db, outbox_event.id)
 
     return {
         "id": booking.id,
         "booking_reference": booking.booking_reference,
         "status": booking.status.value,
         "message": f"Booking status updated to {booking.status.value}",
-        "email_notified": email_notification is not None,
-        "email_status": email_notification.sent_status if email_notification else None
+        "email_notified": email_status in {"SENT", "MOCK_SENT"},
+        "email_status": email_status,
     }
 
 

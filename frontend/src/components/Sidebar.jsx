@@ -1,6 +1,7 @@
 import React from 'react';
 import { NavLink, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useI18n } from '../context/I18nContext';
 import {
   Compass,
   Layers,
@@ -20,6 +21,7 @@ import {
 
 export default function Sidebar() {
   const { user, isProvider, isAdmin } = useAuth();
+  const { t } = useI18n();
   const location = useLocation();
   const searchParams = new URLSearchParams(location.search);
   const currentTab = searchParams.get('tab');
@@ -54,7 +56,7 @@ export default function Sidebar() {
           // ================= ADMIN NAVIGATION =================
           <>
             <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', padding: '0.5rem 0.75rem 0.25rem' }}>
-              Admin Control
+              {t('nav.adminControl')}
             </div>
 
             <Link
@@ -62,7 +64,7 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && (!currentTab || currentTab === 'analytics') ? 'active' : ''}`}
             >
               <LayoutDashboard size={19} />
-              <span className="sidebar-text">Dashboard</span>
+              <span className="sidebar-text">{t('nav.dashboard')}</span>
             </Link>
 
             <Link
@@ -70,7 +72,7 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && currentTab === 'users' ? 'active' : ''}`}
             >
               <Users size={19} />
-              <span className="sidebar-text">Users</span>
+              <span className="sidebar-text">{t('nav.users')}</span>
             </Link>
 
             <Link
@@ -78,7 +80,7 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && currentTab === 'providers' ? 'active' : ''}`}
             >
               <UserCheck size={19} />
-              <span className="sidebar-text">Providers</span>
+              <span className="sidebar-text">{t('nav.providers')}</span>
             </Link>
 
             <Link
@@ -86,7 +88,7 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && currentTab === 'services' ? 'active' : ''}`}
             >
               <Layers size={19} />
-              <span className="sidebar-text">Services</span>
+              <span className="sidebar-text">{t('common.services')}</span>
             </Link>
 
             <Link
@@ -94,7 +96,7 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && currentTab === 'bookings' ? 'active' : ''}`}
             >
               <CalendarCheck size={19} />
-              <span className="sidebar-text">Bookings</span>
+              <span className="sidebar-text">{t('common.bookings')}</span>
             </Link>
 
             <Link
@@ -102,7 +104,7 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && currentTab === 'reviews' ? 'active' : ''}`}
             >
               <Star size={19} />
-              <span className="sidebar-text">Reviews</span>
+              <span className="sidebar-text">{t('nav.reviews')}</span>
             </Link>
 
             <Link
@@ -110,33 +112,33 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && currentTab === 'analytics' ? 'active' : ''}`}
             >
               <BarChart3 size={19} />
-              <span className="sidebar-text">Analytics</span>
+              <span className="sidebar-text">{t('nav.analytics')}</span>
             </Link>
 
             <div style={{ borderTop: '1px solid var(--border)', margin: '0.75rem 0' }} />
 
             <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', padding: '0.25rem 0.75rem' }}>
-              Marketplace View
+              {t('nav.marketplace')}
             </div>
 
             <NavLink to="/discover" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
               <Compass size={19} />
-              <span className="sidebar-text">Discover</span>
+              <span className="sidebar-text">{t('common.discover')}</span>
             </NavLink>
             <NavLink to="/services" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
               <Layers size={19} />
-              <span className="sidebar-text">All Services</span>
+              <span className="sidebar-text">{t('nav.allServices')}</span>
             </NavLink>
             <NavLink to="/maps" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
               <MapPin size={19} />
-              <span className="sidebar-text">Maps</span>
+              <span className="sidebar-text">{t('common.maps')}</span>
             </NavLink>
           </>
         ) : isProvider ? (
           // ================= PROVIDER NAVIGATION =================
           <>
             <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', padding: '0.5rem 0.75rem 0.25rem' }}>
-              Provider Portal
+              {t('nav.providerPortal')}
             </div>
 
             <Link
@@ -144,7 +146,7 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && (!currentTab || currentTab === 'overview') ? 'active' : ''}`}
             >
               <LayoutDashboard size={19} />
-              <span className="sidebar-text">Dashboard</span>
+              <span className="sidebar-text">{t('nav.dashboard')}</span>
             </Link>
 
             <Link
@@ -152,7 +154,7 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && currentTab === 'services' ? 'active' : ''}`}
             >
               <Layers size={19} />
-              <span className="sidebar-text">My Services</span>
+              <span className="sidebar-text">{t('nav.myServices')}</span>
             </Link>
 
             <Link
@@ -160,7 +162,7 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && currentTab === 'bookings' ? 'active' : ''}`}
             >
               <CalendarCheck size={19} />
-              <span className="sidebar-text">Bookings</span>
+              <span className="sidebar-text">{t('common.bookings')}</span>
             </Link>
 
             <Link
@@ -168,7 +170,7 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && currentTab === 'reviews' ? 'active' : ''}`}
             >
               <Star size={19} />
-              <span className="sidebar-text">Reviews</span>
+              <span className="sidebar-text">{t('nav.reviews')}</span>
             </Link>
 
             <Link
@@ -176,18 +178,18 @@ export default function Sidebar() {
               className={`sidebar-link ${location.pathname === '/dashboard' && currentTab === 'profile' ? 'active' : ''}`}
             >
               <Briefcase size={19} />
-              <span className="sidebar-text">Profile</span>
+              <span className="sidebar-text">{t('nav.profile')}</span>
             </Link>
 
             <div style={{ borderTop: '1px solid var(--border)', margin: '0.75rem 0' }} />
 
             <NavLink to="/discover" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
               <Compass size={19} />
-              <span className="sidebar-text">Discover</span>
+              <span className="sidebar-text">{t('common.discover')}</span>
             </NavLink>
             <NavLink to="/maps" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
               <MapPin size={19} />
-              <span className="sidebar-text">Maps</span>
+              <span className="sidebar-text">{t('common.maps')}</span>
             </NavLink>
           </>
         ) : (
@@ -198,7 +200,7 @@ export default function Sidebar() {
               className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
             >
               <Compass size={19} />
-              <span className="sidebar-text">Discover</span>
+              <span className="sidebar-text">{t('common.discover')}</span>
             </NavLink>
 
             <NavLink
@@ -206,7 +208,7 @@ export default function Sidebar() {
               className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
             >
               <Layers size={19} />
-              <span className="sidebar-text">Services</span>
+              <span className="sidebar-text">{t('common.services')}</span>
             </NavLink>
 
             <NavLink
@@ -214,7 +216,7 @@ export default function Sidebar() {
               className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
             >
               <MapPin size={19} />
-              <span className="sidebar-text">Maps</span>
+              <span className="sidebar-text">{t('common.maps')}</span>
             </NavLink>
 
             <NavLink
@@ -222,7 +224,7 @@ export default function Sidebar() {
               className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
             >
               <CalendarCheck size={19} />
-              <span className="sidebar-text">Bookings</span>
+              <span className="sidebar-text">{t('common.bookings')}</span>
             </NavLink>
 
             <NavLink
@@ -230,7 +232,7 @@ export default function Sidebar() {
               className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
             >
               <Bot size={19} />
-              <span className="sidebar-text">AI Assistant</span>
+              <span className="sidebar-text">{t('nav.assistant')}</span>
             </NavLink>
           </>
         )}
@@ -269,7 +271,7 @@ export default function Sidebar() {
                 {user.full_name}
               </div>
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                {user.role} Workspace
+                {t('nav.workspace', { role: t(isAdmin ? 'nav.adminRole' : isProvider ? 'nav.providerRole' : 'nav.customerRole') })}
               </div>
             </div>
           </Link>

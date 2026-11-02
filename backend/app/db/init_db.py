@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 from app.db.base_class import Base
@@ -14,6 +15,12 @@ from app.models.provider_service import ProviderService
 from app.models.booking import Booking
 from app.models.review import Review
 from app.models.rating import Rating
+from app.models.email_verification import EmailVerification
+from app.models.provider_document import ProviderDocument
+from app.models.provider_verification import ProviderVerification
+from app.models.booking_email_outbox import BookingEmailOutbox
+from app.models.notification import Notification
+from app.models.problem_image import ProblemImage
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -78,6 +85,41 @@ INITIAL_DATA = [
             {"name": "Car Repair", "slug": "car-repair", "base_price": 1200.0, "duration": 120, "description": "Engine diagnostics, brake pad replacement, and mechanical repair."},
             {"name": "Bike Repair", "slug": "bike-repair", "base_price": 400.0, "duration": 60, "description": "General two-wheeler servicing, chain tightening, oil change, and clutch adjustment."},
             {"name": "Servicing", "slug": "servicing", "base_price": 1500.0, "duration": 180, "description": "Periodic vehicle service package including oil, filter, wash, and multi-point inspection."}
+        ]
+    },
+    {
+        "category": "Appliance Repair",
+        "slug": "appliance-repair",
+        "description": "Repair and maintenance for common household appliances.",
+        "icon": "washing-machine",
+        "services": [
+            {"name": "Refrigerator Repair", "slug": "refrigerator-repair", "base_price": 500.0, "duration": 90, "description": "Diagnosis and repair for refrigerator cooling, leaks, and electrical faults."},
+            {"name": "Washing Machine Repair", "slug": "washing-machine-repair", "base_price": 500.0, "duration": 90, "description": "Repair for washing machine drainage, spin cycle, and electrical problems."},
+            {"name": "Microwave Repair", "slug": "microwave-repair", "base_price": 400.0, "duration": 60, "description": "Diagnosis and repair for microwave heating and control issues."},
+            {"name": "Dishwasher Repair", "slug": "dishwasher-repair", "base_price": 500.0, "duration": 90, "description": "Repair for dishwasher drainage, cleaning, and operating faults."}
+        ]
+    },
+    {
+        "category": "Beauty and Personal Care",
+        "slug": "beauty-personal-care",
+        "description": "Personal grooming and beauty services from local professionals.",
+        "icon": "sparkles",
+        "services": [
+            {"name": "Haircut and Styling", "slug": "haircut-styling", "base_price": 500.0, "duration": 60, "description": "Haircut, styling, and grooming services by a local professional."},
+            {"name": "Makeup Artist", "slug": "makeup-artist", "base_price": 1500.0, "duration": 90, "description": "Makeup services for events, celebrations, and special occasions."},
+            {"name": "Manicure and Pedicure", "slug": "manicure-pedicure", "base_price": 700.0, "duration": 75, "description": "Nail grooming and care services from a personal care specialist."},
+            {"name": "Skin Care", "slug": "skin-care", "base_price": 900.0, "duration": 60, "description": "Personal skin care and facial services from a trained professional."}
+        ]
+    },
+    {
+        "category": "Moving Services",
+        "slug": "moving-services",
+        "description": "Local support for packing, furniture handling, and home relocation.",
+        "icon": "truck",
+        "services": [
+            {"name": "Home Relocation", "slug": "home-relocation", "base_price": 5000.0, "duration": 240, "description": "Local home relocation assistance for household belongings."},
+            {"name": "Packing and Unpacking", "slug": "packing-unpacking", "base_price": 1800.0, "duration": 180, "description": "Careful packing and unpacking assistance for a home move."},
+            {"name": "Furniture Moving", "slug": "furniture-moving", "base_price": 1500.0, "duration": 120, "description": "Moving and handling support for household furniture."}
         ]
     }
 ]
@@ -165,31 +207,35 @@ def init_db(db: Session) -> None:
     """Create all database tables and seed initial administrator, categories, and providers."""
     logger.info("Creating database tables if not exist...")
     Base.metadata.create_all(bind=engine)
+    _ensure_marketplace_schema()
     _ensure_chat_schema()
 
     # 1. Seed Super Admin
-    admin_user = db.query(User).filter(User.email == settings.FIRST_SUPERUSER_EMAIL).first()
-    if admin_user:
-        if admin_user.role != UserRole.ADMIN:
-            admin_user.hashed_password = get_password_hash(settings.FIRST_SUPERUSER_PASSWORD)
-        admin_user.role = UserRole.ADMIN
-        admin_user.is_active = True
-        admin_user.full_name = settings.FIRST_SUPERUSER_NAME
-        db.commit()
-    else:
-        logger.info(f"Creating super admin: {settings.FIRST_SUPERUSER_EMAIL}")
-        admin_user = User(
-            email=settings.FIRST_SUPERUSER_EMAIL,
-            hashed_password=get_password_hash(settings.FIRST_SUPERUSER_PASSWORD),
-            full_name=settings.FIRST_SUPERUSER_NAME,
-            role=UserRole.ADMIN,
-            is_active=True
-        )
-        db.add(admin_user)
-        db.commit()
+    if settings.FIRST_SUPERUSER_EMAIL and settings.FIRST_SUPERUSER_PASSWORD:
+        admin_user = db.query(User).filter(User.email == settings.FIRST_SUPERUSER_EMAIL).first()
+        if admin_user:
+            if admin_user.role != UserRole.ADMIN:
+                admin_user.hashed_password = get_password_hash(settings.FIRST_SUPERUSER_PASSWORD)
+            admin_user.role = UserRole.ADMIN
+            admin_user.is_active = True
+            admin_user.full_name = settings.FIRST_SUPERUSER_NAME
+            db.commit()
+        else:
+            logger.info("Creating configured super administrator.")
+            admin_user = User(
+                email=settings.FIRST_SUPERUSER_EMAIL,
+                hashed_password=get_password_hash(settings.FIRST_SUPERUSER_PASSWORD),
+                full_name=settings.FIRST_SUPERUSER_NAME,
+                role=UserRole.ADMIN,
+                is_active=True,
+                email_verified_at=datetime.now(timezone.utc),
+            )
+            db.add(admin_user)
+            db.commit()
 
     # Also ensure demo admin exists for automated test suite and demo access
-    if settings.FIRST_SUPERUSER_EMAIL.lower() != "admin@marketplace.com":
+    seed_demo_data = settings.ENVIRONMENT.lower() != "production" and settings.SEED_DEMO_DATA
+    if seed_demo_data and settings.FIRST_SUPERUSER_EMAIL != "admin@marketplace.com":
         demo_admin = db.query(User).filter(User.email == "admin@marketplace.com").first()
         if not demo_admin:
             demo_admin = User(
@@ -197,7 +243,8 @@ def init_db(db: Session) -> None:
                 hashed_password=get_password_hash("AdminPassword123!"),
                 full_name="Marketplace Admin",
                 role=UserRole.ADMIN,
-                is_active=True
+                is_active=True,
+                email_verified_at=datetime.now(timezone.utc),
             )
             db.add(demo_admin)
             db.commit()
@@ -209,7 +256,7 @@ def init_db(db: Session) -> None:
 
     # 2. Seed Standard User
     demo_user = db.query(User).filter(User.email == "user@marketplace.com").first()
-    if not demo_user:
+    if seed_demo_data and not demo_user:
         logger.info("Creating demo user: user@marketplace.com")
         demo_user = User(
             email="user@marketplace.com",
@@ -217,7 +264,8 @@ def init_db(db: Session) -> None:
             full_name="Alex Johnson",
             phone="+91-9876543210",
             role=UserRole.USER,
-            is_active=True
+            is_active=True,
+            email_verified_at=datetime.now(timezone.utc),
         )
         db.add(demo_user)
         db.commit()
@@ -253,7 +301,7 @@ def init_db(db: Session) -> None:
     db.commit()
 
     # 4. Seed Providers and Link Services
-    for prov in PROVIDERS_SEED:
+    for prov in (PROVIDERS_SEED if seed_demo_data else []):
         p_user = db.query(User).filter(User.email == prov["email"]).first()
         if not p_user:
             p_user = User(
@@ -277,6 +325,7 @@ def init_db(db: Session) -> None:
                 latitude=prov["lat"],
                 longitude=prov["lon"],
                 is_verified=True,
+                verification_status="APPROVED",
                 is_available=True,
                 rating_avg=prov["rating"],
                 total_ratings=prov["reviews_count"]
@@ -296,6 +345,8 @@ def init_db(db: Session) -> None:
                     description=f"Specialist in {svc.name} diagnosis and precision service.",
                     experience=f"{prov['experience']} years",
                     service_location=prov["address"],
+                    service_latitude=prov["lat"],
+                    service_longitude=prov["lon"],
                     status=ServiceApprovalStatus.APPROVED,
                     is_active=True
                 )
@@ -315,6 +366,8 @@ def init_db(db: Session) -> None:
                             description=f"Expert in {extra_svc.name}.",
                             experience="8 years",
                             service_location=prov["address"],
+                            service_latitude=prov["lat"],
+                            service_longitude=prov["lon"],
                             status=ServiceApprovalStatus.APPROVED,
                             is_active=True
                         )
@@ -325,7 +378,7 @@ def init_db(db: Session) -> None:
     demo_prov = db.query(Provider).first()
     ac_svc = db.query(Service).filter(Service.slug == "ac-repair").first()
 
-    if demo_cust and demo_prov and ac_svc:
+    if seed_demo_data and demo_cust and demo_prov and ac_svc:
         existing_b = db.query(Booking).filter(Booking.booking_reference == "BK-DEMO-001").first()
         if not existing_b:
             booking = Booking(
@@ -384,3 +437,63 @@ def _ensure_chat_schema() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_message_client_id "
             "ON chat_messages (conversation_id, client_message_id)"
         ))
+
+
+def _ensure_marketplace_schema() -> None:
+    """Add marketplace lifecycle/location columns to existing databases without dropping data."""
+    inspector = inspect(engine)
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
+    additions = {
+        "users": {
+            "email_verified_at": timestamp_type,
+            "preferred_language": "VARCHAR(5) NOT NULL DEFAULT 'en'",
+        },
+        "providers": {
+            "verification_status": "VARCHAR(20) NOT NULL DEFAULT 'PENDING'",
+            "service_radius_km": "FLOAT NOT NULL DEFAULT 15.0",
+        },
+        "provider_services": {
+            "service_latitude": "FLOAT",
+            "service_longitude": "FLOAT",
+        },
+        "bookings": {
+            "order_id": "INTEGER",
+            "problem_image_id": "INTEGER",
+        },
+    }
+    provider_status_needs_backfill = False
+    with engine.begin() as connection:
+        for table_name, columns in additions.items():
+            if table_name not in inspector.get_table_names():
+                continue
+            existing = {column["name"] for column in inspector.get_columns(table_name)}
+            provider_status_needs_backfill = provider_status_needs_backfill or (
+                table_name == "providers" and "verification_status" not in existing
+            )
+            for column_name, column_type in columns.items():
+                if column_name not in existing:
+                    if table_name == "bookings" and column_name == "order_id":
+                        column_type = "INTEGER REFERENCES service_orders(id) ON DELETE SET NULL"
+                    if table_name == "bookings" and column_name == "problem_image_id":
+                        column_type = "INTEGER REFERENCES problem_images(id) ON DELETE SET NULL"
+                    connection.execute(text(
+                        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+                    ))
+        if "providers" in inspector.get_table_names():
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_providers_verification_status "
+                "ON providers (verification_status)"
+            ))
+        if "bookings" in inspector.get_table_names():
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_bookings_order_id ON bookings (order_id)"
+            ))
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_bookings_problem_image_id ON bookings (problem_image_id)"
+            ))
+    if provider_status_needs_backfill:
+        with engine.begin() as connection:
+            connection.execute(text(
+                "UPDATE providers SET verification_status = 'APPROVED' "
+                "WHERE is_verified IS TRUE AND verification_status = 'PENDING'"
+            ))

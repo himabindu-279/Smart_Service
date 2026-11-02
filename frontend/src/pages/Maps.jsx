@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import L from 'leaflet';
 import { api } from '../api/client';
+import { useI18n } from '../context/I18nContext';
 import {
   MapPin,
   Navigation,
@@ -52,6 +53,7 @@ const leafletProviderIcon = new L.Icon({
 });
 
 export default function Maps() {
+  const { t } = useI18n();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -343,7 +345,7 @@ export default function Maps() {
         leafletMapInstanceRef.current.invalidateSize();
       }
     }, 150);
-  }, [userLocation, radiusKm, nearbyProviders]);
+  }, [userLocation, radiusKm, nearbyProviders, t]);
 
   // 4. Render Google Map Engine
   const renderGoogleMap = useCallback(() => {
@@ -480,7 +482,7 @@ export default function Maps() {
         google.maps.event.trigger(googleMapInstanceRef.current, 'resize');
       }
     }, 150);
-  }, [userLocation, radiusKm, nearbyProviders]);
+  }, [userLocation, radiusKm, nearbyProviders, t]);
 
   // Master Map Render Controller
   useEffect(() => {
@@ -650,8 +652,12 @@ export default function Maps() {
             <Compass className="w-5 h-5 text-blue-600" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-slate-900">Interactive Service Map</h1>
-            <p className="text-xs text-slate-500">Live PostgreSQL-backed providers via Real Interactive Maps</p>
+            <h1 className="text-xl font-bold text-slate-900">{t('maps.title')}</h1>
+            <p className="text-xs text-slate-500">{t('maps.subtitle')}</p>
+          </div>
+          <div className="maps-results-pill" aria-live="polite">
+            <span className="maps-results-dot" />
+            <span>{t('maps.nearbyProviders', { count: nearbyProviders.length })}</span>
           </div>
         </div>
 
@@ -662,7 +668,7 @@ export default function Maps() {
             <input
               type="text"
               className="location-input"
-              placeholder="Enter city, area, address, or postal code..."
+              placeholder={t('maps.locationPlaceholder')}
               value={locationSearchInput}
               onChange={(e) => setLocationSearchInput(e.target.value)}
             />
@@ -671,7 +677,7 @@ export default function Maps() {
                 type="button"
                 onClick={() => setLocationSearchInput('')}
                 className="clear-input-btn"
-                title="Clear input"
+                title={t('maps.clearInput')}
               >
                 <X className="w-3.5 h-3.5 text-slate-400 hover:text-slate-600" />
               </button>
@@ -688,7 +694,7 @@ export default function Maps() {
             ) : (
               <Search className="w-4 h-4" />
             )}
-            <span>Search</span>
+            <span>{t('maps.search')}</span>
           </button>
 
           <button
@@ -696,14 +702,14 @@ export default function Maps() {
             onClick={handleUseCurrentLocation}
             disabled={geoLocating}
             className="gps-btn"
-            title="Use browser Geolocation (HTML5 GPS - No Key Needed)"
+            title={t('maps.useLocation')}
           >
             {geoLocating ? (
               <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
             ) : (
               <Navigation className="w-4 h-4 text-blue-600" />
             )}
-            <span>Use My Location</span>
+            <span>{t('maps.useLocation')}</span>
           </button>
         </form>
       </div>
@@ -724,7 +730,7 @@ export default function Maps() {
         <div className="maps-alert-banner info">
           <AlertCircle className="w-4 h-4 text-blue-600 flex-shrink-0" />
           <div className="flex-1 text-xs text-blue-900">
-            <span className="font-semibold">Map Notice: </span>
+            <span className="font-semibold">{t('maps.notice')} </span>
             {googleMapsError}
           </div>
           <button
@@ -734,7 +740,7 @@ export default function Maps() {
             }}
             className="px-2 py-0.5 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded text-xs font-semibold"
           >
-            Retry Google Maps
+            {t('maps.retryGoogle')}
           </button>
         </div>
       )}
@@ -745,13 +751,13 @@ export default function Maps() {
         <div className="maps-sidebar-panel">
           <div className="filter-controls-box">
             <div className="filter-row">
-              <label className="filter-label">Filter Service</label>
+              <label className="filter-label">{t('maps.filterService')}</label>
               <select
                 className="filter-select"
                 value={selectedServiceId}
                 onChange={(e) => setSelectedServiceId(e.target.value)}
               >
-                <option value="">All Approved Services</option>
+                <option value="">{t('maps.allServices')}</option>
                 {services.map((svc) => (
                   <option key={svc.id} value={svc.id}>
                     {svc.name}
@@ -762,7 +768,7 @@ export default function Maps() {
 
             <div className="filter-row">
               <div className="flex justify-between items-center mb-1">
-                <label className="filter-label">Search Radius</label>
+                <label className="filter-label">{t('maps.radius')}</label>
                 <span className="text-xs font-bold text-blue-600">{radiusKm} km</span>
               </div>
               <input
@@ -788,11 +794,11 @@ export default function Maps() {
 
           <div className="providers-list-header">
             <span className="font-semibold text-xs text-slate-600 uppercase tracking-wider">
-              {loadingProviders ? 'Searching...' : `${nearbyProviders.length} Nearby Provider${nearbyProviders.length === 1 ? '' : 's'}`}
+              {loadingProviders ? t('maps.searching') : t('maps.nearbyProviders', { count: nearbyProviders.length })}
             </span>
             {userLocation && (
               <span className="text-xs text-slate-500 font-medium">
-                Within {radiusKm} km
+                {t('maps.within', { count: radiusKm })}
               </span>
             )}
           </div>
@@ -801,9 +807,9 @@ export default function Maps() {
             {!userLocation ? (
               <div className="empty-state-notice">
                 <Compass className="w-10 h-10 text-blue-500 mx-auto mb-2" />
-                <h3 className="font-semibold text-slate-800 text-sm mb-1">Interactive Map Ready</h3>
+                <h3 className="font-semibold text-slate-800 text-sm mb-1">{t('maps.ready')}</h3>
                 <p className="text-xs text-slate-500 max-w-xs mx-auto mb-3">
-                  Please enter a city or address in the search box, or click <strong>Use My Location</strong> to find nearby verified providers.
+                  {t('maps.locationInstructions')}
                 </p>
                 <button
                   onClick={handleUseCurrentLocation}
@@ -811,26 +817,26 @@ export default function Maps() {
                   className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition"
                 >
                   <Navigation className="w-3.5 h-3.5" />
-                  <span>Use My Location</span>
+                  <span>{t('maps.useLocation')}</span>
                 </button>
               </div>
             ) : loadingProviders ? (
               <div className="loading-state-notice">
                 <RefreshCw className="w-6 h-6 animate-spin text-blue-600 mx-auto mb-2" />
-                <p className="text-xs text-slate-500">Calculating Haversine distance to approved providers...</p>
+                <p className="text-xs text-slate-500">{t('maps.calculating')}</p>
               </div>
             ) : nearbyProviders.length === 0 ? (
               <div className="empty-state-notice">
                 <MapPin className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-                <h3 className="font-semibold text-slate-800 text-sm mb-1">No Providers in this Radius</h3>
+                <h3 className="font-semibold text-slate-800 text-sm mb-1">{t('maps.noneRadius')}</h3>
                 <p className="text-xs text-slate-500 max-w-xs mx-auto mb-3">
-                  No approved providers found within {radiusKm} km. Try increasing the search radius or selecting another service.
+                  {t('maps.noProviders', { count: radiusKm })}
                 </p>
                 <button
                   onClick={() => setRadiusKm(35)}
                   className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
                 >
-                  Expand Radius to 35 km
+                  {t('maps.expandRadius')}
                 </button>
               </div>
             ) : (
@@ -854,10 +860,10 @@ export default function Maps() {
                   <div className="flex items-center justify-between text-xs text-slate-500 mb-2">
                     <span className="inline-flex items-center gap-1 font-semibold text-slate-700">
                       <MapPin className="w-3 h-3 text-red-500" />
-                      {p.distance} km away
+                      {t('maps.away', { count: p.distance })}
                     </span>
                     <span className="font-bold text-slate-900 text-xs">
-                      Starts ₹{p.price}
+                      {t('maps.starts', { price: p.price })}
                     </span>
                   </div>
 
@@ -871,7 +877,7 @@ export default function Maps() {
                         onClick={(e) => e.stopPropagation()}
                         className="text-slate-600 hover:text-slate-900 font-semibold text-xs"
                       >
-                        Profile
+                        {t('maps.profile')}
                       </Link>
                       <button
                         onClick={(e) => {
@@ -883,7 +889,7 @@ export default function Maps() {
                         }}
                         className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold transition"
                       >
-                        Book Now
+                        {t('maps.bookNow')}
                       </button>
                     </div>
                   </div>
@@ -902,7 +908,7 @@ export default function Maps() {
                 type="button"
                 onClick={() => setMapEngine('google')}
                 className={`engine-toggle-btn ${mapEngine === 'google' ? 'active' : ''}`}
-                title="Use Google Maps Engine"
+                title="Google Maps"
               >
                 <span>Google Maps</span>
                 {mapEngine === 'google' && <Check className="w-3 h-3 ml-1" />}
@@ -911,7 +917,7 @@ export default function Maps() {
                 type="button"
                 onClick={() => setMapEngine('leaflet')}
                 className={`engine-toggle-btn ${mapEngine === 'leaflet' ? 'active' : ''}`}
-                title="Use OpenStreetMap Engine"
+                title="OpenStreetMap"
               >
                 <span>OpenStreetMap</span>
                 {mapEngine === 'leaflet' && <Check className="w-3 h-3 ml-1" />}
@@ -924,10 +930,10 @@ export default function Maps() {
             <div className="map-location-prompt-card">
               <div className="flex items-center gap-2 mb-1">
                 <MapPin className="w-4 h-4 text-blue-600" />
-                <span className="font-bold text-slate-900 text-xs">Ready to Search</span>
+                <span className="font-bold text-slate-900 text-xs">{t('maps.readySearch')}</span>
               </div>
               <p className="text-xs text-slate-600 mb-2 leading-tight">
-                Enter your city in the top bar or use your current location to view nearby providers on the map.
+                {t('maps.prompt')}
               </p>
               <button
                 onClick={handleUseCurrentLocation}
@@ -935,7 +941,7 @@ export default function Maps() {
                 className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition"
               >
                 <Navigation className="w-3.5 h-3.5" />
-                <span>Use Current Location</span>
+                <span>{t('maps.useCurrent')}</span>
               </button>
             </div>
           )}
@@ -959,8 +965,8 @@ export default function Maps() {
                   <Calendar className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900">Book {bookingProvider.service}</h3>
-                  <p className="text-xs text-slate-500">Provider: {bookingProvider.provider_name}</p>
+                  <h3 className="font-bold text-slate-900">{t('maps.book', { service: bookingProvider.service })}</h3>
+                  <p className="text-xs text-slate-500">{t('maps.provider')}: {bookingProvider.provider_name}</p>
                 </div>
               </div>
               <button
@@ -976,9 +982,9 @@ export default function Maps() {
                 <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-3">
                   <CheckCircle className="w-6 h-6" />
                 </div>
-                <h4 className="text-lg font-bold text-slate-900 mb-1">Booking Confirmed!</h4>
+                <h4 className="text-lg font-bold text-slate-900 mb-1">{t('maps.bookingConfirmed')}</h4>
                 <p className="text-xs text-slate-600 mb-4">
-                  Your appointment request has been scheduled with <strong>{bookingProvider.provider_name}</strong>. An email notification has been dispatched to your registered address.
+                  {t('maps.bookingScheduled', { provider: bookingProvider.provider_name })}
                 </p>
                 <div className="flex gap-2 justify-center">
                   <button
@@ -988,13 +994,13 @@ export default function Maps() {
                     }}
                     className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold"
                   >
-                    View in My Bookings
+                    {t('maps.viewBookings')}
                   </button>
                   <button
                     onClick={() => setBookingProvider(null)}
                     className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
                   >
-                    Close
+                    {t('common.close')}
                   </button>
                 </div>
               </div>
@@ -1008,7 +1014,7 @@ export default function Maps() {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Service Date</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">{t('maps.serviceDate')}</label>
                     <input
                       type="date"
                       required
@@ -1018,7 +1024,7 @@ export default function Maps() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Preferred Time</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">{t('maps.preferredTime')}</label>
                     <select
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
                       value={bookingTime}
@@ -1035,11 +1041,11 @@ export default function Maps() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Service Address</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{t('maps.address')}</label>
                   <input
                     type="text"
                     required
-                    placeholder="Enter your complete street address..."
+                    placeholder={t('maps.addressPlaceholder')}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     value={serviceAddress}
                     onChange={(e) => setServiceAddress(e.target.value)}
@@ -1047,10 +1053,10 @@ export default function Maps() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Instructions for Provider</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{t('maps.instructions')}</label>
                   <textarea
                     rows={2}
-                    placeholder="Describe specific issues, gate codes, or landmarks..."
+                    placeholder={t('maps.instructionsPlaceholder')}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     value={specialInstructions}
                     onChange={(e) => setSpecialInstructions(e.target.value)}
@@ -1059,7 +1065,7 @@ export default function Maps() {
 
                 <div className="pt-2 border-t border-slate-200 flex items-center justify-between">
                   <div>
-                    <span className="text-xs text-slate-500">Estimated Total:</span>
+                    <span className="text-xs text-slate-500">{t('maps.estimatedTotal')}</span>
                     <span className="block font-bold text-slate-900 text-base">₹{bookingProvider.price}</span>
                   </div>
                   <div className="flex gap-2">
@@ -1068,14 +1074,14 @@ export default function Maps() {
                       onClick={() => setBookingProvider(null)}
                       className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
                     >
-                      Cancel
+                      {t('common.cancel')}
                     </button>
                     <button
                       type="submit"
                       disabled={bookingSubmitting}
                       className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition disabled:opacity-50"
                     >
-                      {bookingSubmitting ? 'Confirming...' : 'Confirm Appointment'}
+                      {bookingSubmitting ? t('maps.confirming') : t('maps.confirm')}
                     </button>
                   </div>
                 </div>

@@ -16,7 +16,12 @@ ENV/
 
 # Environment files
 .env
-*.env.local
+.env.*
+!.env.example
+
+# Private provider identity and qualification documents
+private_uploads/
+backend/private_uploads/
 
 # Local SQLite databases
 *.db

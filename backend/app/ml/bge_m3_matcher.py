@@ -109,14 +109,80 @@ class BGEM3Matcher:
     }
 
     SERVICE_ALIASES = {
-        "plumbing": ["plumbing", "plumber", "plumbers", "plumbing repair", "pipe repair", "tap repair", "faucet repair"],
-        "mathematics": ["math", "maths", "mathematics", "algebra", "calculus", "geometry"],
-        "tutors": ["tutor", "tutors", "tuition", "teacher", "homework help"],
-        "car-repair": ["car repair", "car mechanic", "automotive repair", "brake repair", "engine repair"],
-        "bike-repair": ["bike repair", "motorcycle repair", "scooter repair", "two wheeler repair"],
-        "ac-repair": ["ac repair", "air conditioner repair", "air conditioning repair", "hvac repair"],
-        "electrical": ["electrician", "electrical repair", "wiring repair", "switchboard repair"],
-        "cleaning": ["home cleaning", "house cleaning", "deep cleaning", "cleaner"],
+        "plumbing": [
+            "plumbing", "plumber", "plumbers", "plumbing repair", "pipe repair", "tap repair", "faucet repair",
+            "water pipe leak", "pipe is leaking", "sink is leaking", "tap is leaking", "drain is blocked",
+            "ప్లంబింగ్", "పైపు లీకేజ్", "పైప్ లీకేజ్", "పైపు మరమ్మత్తు", "కుళాయి మరమ్మత్తు", "ట్యాప్ రిపేర్",
+            "నా ఇంటి పైపు లీక్ అవుతోంది", "ఇంటి పైపు లీక్ అవుతోంది", "నీటి పైపు లీక్ అవుతోంది",
+            "కుళాయి నుండి నీరు కారుతోంది", "సింక్ లీక్ అవుతోంది",
+            "प्लंबिंग", "पाइप लीकेज", "पाइप रिसाव", "नल की मरम्मत", "पाइप मरम्मत",
+            "मेरे घर का नल लीक हो रहा है", "घर का नल लीक हो रहा है", "पाइप से पानी लीक हो रहा है",
+            "सिंक से पानी लीक हो रहा है", "नल से पानी टपक रहा है",
+        ],
+        "mathematics": ["math", "maths", "mathematics", "algebra", "calculus", "geometry", "math tutor", "गणित की ट्यूशन", "గణిత ట్యూషన్"],
+        "tutors": ["tutor", "tutors", "tuition", "teacher", "homework help", "school tutor", "ट्यूटर", "ట్యూటర్"],
+        "car-repair": ["car repair", "car mechanic", "automotive repair", "brake repair", "engine repair", "car won't start", "car breakdown"],
+        "bike-repair": ["bike repair", "motorcycle repair", "scooter repair", "two wheeler repair", "bike won't start"],
+        "servicing": ["vehicle servicing", "car servicing", "bike servicing", "vehicle service", "routine car maintenance"],
+        "ac-repair": [
+            "ac repair", "air conditioner repair", "air conditioning repair", "hvac repair",
+            "ఏసీ రిపేర్", "ఏసీ మరమ్మత్తు", "ఏసీ పని చేయడం లేదు", "ఏసీ చల్లబరచడం లేదు", "ఎయిర్ కండిషనర్ మరమ్మత్తు",
+            "एसी मरम्मत", "एसी ठीक करना", "एसी काम नहीं कर रहा", "एसी ठंडा नहीं कर रहा", "एयर कंडीशनर मरम्मत",
+        ],
+        "ac-maintenance": ["ac maintenance", "ac servicing", "ac service", "clean ac filter", "ఏసీ సర్వీసింగ్", "एसी सर्विसिंग"],
+        "ac-installation": ["ac installation", "install an ac", "install air conditioner", "ఏసీ ఇన్‌స్టాలేషన్", "एसी लगवाना"],
+        "electrical": [
+            "electrician", "electrical repair", "wiring repair", "switchboard repair",
+            "fan repair", "ceiling fan", "ceiling fan repair", "my ceiling fan is not working",
+            "my fan is not working", "fan is not rotating", "fan stopped rotating",
+            "విద్యుత్ మరమ్మత్తు", "వైరింగ్ రిపేర్", "స్విచ్ మరమ్మత్తు", "ఎలక్ట్రిషియన్",
+            "बिजली की मरम्मत", "वायरिंग मरम्मत", "स्विच की मरम्मत", "इलेक्ट्रीशियन",
+        ],
+        "cleaning": [
+            "home cleaning", "house cleaning", "deep cleaning", "cleaner",
+            "ఇంటి శుభ్రపరచడం", "డీప్ క్లీనింగ్", "ఇల్లు శుభ్రం చేయాలి",
+            "घर की सफाई", "डीप क्लीनिंग", "घर साफ करना",
+        ],
+        "pest-control": ["pest control", "cockroach problem", "termite treatment", "bed bug treatment", "rats in my house", "దోమల నివారణ", "బొద్దింకలు ఉన్నాయి", "घर में कॉकरोच", "दीमक का इलाज"],
+        "doctor-consultation": ["doctor consultation", "need a doctor", "see a doctor", "डॉक्टर से सलाह", "డాక్టర్ సంప్రదింపు"],
+        "nurse-at-home": ["nurse at home", "home nursing", "wound dressing", "patient care at home", "घर पर नर्स", "ఇంటికి నర్సు"],
+        "physiotherapy": ["physiotherapy", "physiotherapist", "physical therapy", "ఫిజియోథెరపీ", "फिजियोथेरेपी"],
+        "lab-services": ["lab test", "blood test", "diagnostic test", "home sample collection", "రక్త పరీక్ష", "खून की जांच"],
+        "catering": ["catering", "event catering", "party food", "wedding food", "కేటరింగ్", "कैटरिंग"],
+        "home-food": ["home cooked food", "home food", "tiffin service", "daily meals", "ఇంటి భోజనం", "टिफिन सेवा"],
+        "meal-services": ["meal subscription", "weekly meal plan", "monthly meal plan", "meal box"],
+        "baker": ["baker", "bakery", "custom cake", "birthday cake", "కేక్ ఆర్డర్", "जन्मदिन का केक"],
+        "programming": ["programming tutor", "coding tutor", "learn programming", "కోడింగ్ నేర్పండి", "कोडिंग सिखाएं"],
+        "english": ["spoken english", "english tutor", "english lessons", "స్పోకెన్ ఇంగ్లీష్", "अंग्रेज़ी बोलना सीखें"],
+        "refrigerator-repair": [
+            "refrigerator repair", "fridge repair", "refrigerator", "fridge", "freezer repair",
+            "fridge not cooling", "refrigerator not cooling", "fridge stopped working", "fridge is leaking",
+            "ఫ్రిజ్ రిపేర్", "ఫ్రిజ్ చల్లబరచడం లేదు", "రిఫ్రిజిరేటర్ పని చేయడం లేదు",
+            "फ्रिज की मरम्मत", "फ्रिज ठंडा नहीं कर रहा", "फ्रिज काम नहीं कर रहा", "रेफ्रिजरेटर ठीक करना",
+        ],
+        "washing-machine-repair": [
+            "washing machine repair", "washing machine", "washer repair", "washer", "laundry machine",
+            "washing machine stopped", "washing machine not draining", "washing machine won't spin",
+            "వాషింగ్ మెషిన్ రిపేర్", "వాషింగ్ మెషిన్ పని చేయడం లేదు", "వాషింగ్ మెషిన్ నీరు బయటకు పోవడం లేదు",
+            "वॉशिंग मशीन की मरम्मत", "वॉशिंग मशीन काम नहीं कर रही", "वॉशिंग मशीन पानी नहीं निकाल रही",
+        ],
+        "microwave-repair": [
+            "microwave repair", "microwave oven repair", "microwave", "microwave not heating",
+            "మైక్రోవేవ్ రిపేర్", "మైక్రోవేవ్ వేడి చేయడం లేదు",
+            "माइक्रोवेव की मरम्मत", "माइक्रोवेव गर्म नहीं कर रहा",
+        ],
+        "dishwasher-repair": [
+            "dishwasher repair", "dishwasher", "dish washer", "dishwasher not draining", "dishwasher not cleaning",
+            "డిష్‌వాషర్ రిపేర్", "డిష్‌వాషర్ పని చేయడం లేదు",
+            "डिशवॉशर की मरम्मत", "डिशवॉशर काम नहीं कर रहा",
+        ],
+        "haircut-styling": ["haircut", "hair styling", "hairdresser", "haircut at home", "హెయిర్ కట్", "बाल कटवाना"],
+        "makeup-artist": ["makeup artist", "bridal makeup", "party makeup", "మేకప్ ఆర్టిస్ట్", "मेकअप आर्टिस्ट"],
+        "manicure-pedicure": ["manicure", "pedicure", "nail care", "మేనిక్యూర్", "पेडीक्योर"],
+        "skin-care": ["skin care", "facial", "skin treatment", "ఫేషియల్", "त्वचा की देखभाल"],
+        "home-relocation": ["home relocation", "house shifting", "move house", "relocation service", "ఇల్లు మార్పు", "घर शिफ्ट करना"],
+        "packing-unpacking": ["packing service", "unpacking service", "pack my house", "ప్యాకింగ్ సేవ", "पैकिंग सेवा"],
+        "furniture-moving": ["furniture moving", "move my furniture", "furniture movers", "ఫర్నిచర్ తరలింపు", "फर्नीचर शिफ्ट करना"],
     }
 
     @classmethod
@@ -124,7 +190,7 @@ class BGEM3Matcher:
         normalized_query = query.lower().strip()
         for slug, aliases in cls.SERVICE_ALIASES.items():
             for alias in sorted(aliases, key=len, reverse=True):
-                if re.search(rf"\b{re.escape(alias)}\b", normalized_query):
+                if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", normalized_query):
                     return slug
         return None
 

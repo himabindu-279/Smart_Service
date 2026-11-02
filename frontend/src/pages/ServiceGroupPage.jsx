@@ -1,153 +1,111 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { ArrowLeft, ArrowRight, MapPin, Sparkles } from 'lucide-react';
 import { getServiceCategories } from '../api/client';
-import { ArrowLeft, ArrowRight, Clock3, MapPin, Sparkles } from 'lucide-react';
-
-const DISPLAY_NAMES = {
-  'Home Services': 'Home Service',
-  'Healthcare': 'Healthcare',
-  'Food Services': 'Food Service',
-  'Education': 'Education',
-  'Automotive': 'Automotive',
-};
+import ServiceCardImage from '../components/ServiceCardImage';
+import { getServiceCategory } from '../config/serviceCatalog';
+import { useI18n } from '../context/I18nContext';
 
 export default function ServiceGroupPage() {
+  const { t } = useI18n();
   const { categorySlug } = useParams();
-  const [category, setCategory] = useState(null);
+  const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const config = getServiceCategory(categorySlug);
 
   useEffect(() => {
     let isMounted = true;
 
-    const loadCategory = async () => {
-      try {
-        setLoading(true);
-        const categories = await getServiceCategories();
-        const match = categories.find((item) => item.slug === categorySlug);
-        if (!isMounted) return;
-
-        if (!match) {
-          setError('This service group is not available right now.');
-          setCategory(null);
-          return;
-        }
-
-        setCategory(match);
-      } catch (err) {
-        if (isMounted) setError(err.message || 'Could not load this service group.');
-      } finally {
+    getServiceCategories()
+      .then((data) => {
+        if (isMounted) setCategories(data);
+      })
+      .catch((err) => {
+        if (isMounted) setError(err.message || t('services.loadFailed'));
+      })
+      .finally(() => {
         if (isMounted) setLoading(false);
-      }
-    };
+      });
 
-    loadCategory();
     return () => { isMounted = false; };
   }, [categorySlug]);
 
-  const displayName = useMemo(() => {
-    if (!category) return 'Service group';
-    return DISPLAY_NAMES[category.name] || category.name;
-  }, [category]);
+  const taskCards = useMemo(() => {
+    if (!config) return [];
+    const services = categories.flatMap((category) => (
+      (category.services || []).map((service) => ({ ...service, categorySlug: category.slug }))
+    ));
+
+    return config.tasks
+      .map((task) => ({
+        task,
+        service: services.find((service) => service.slug === task.serviceSlug),
+      }))
+      .filter(({ service }) => Boolean(service));
+  }, [categories, config]);
 
   if (loading) {
-    return (
-      <div className="container" style={{ padding: '2.5rem 1.5rem 5rem' }}>
-        <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-          Loading {categorySlug || 'services'}...
-        </div>
-      </div>
-    );
+    return <main className="services-page-container"><div className="services-state" role="status">{t('common.loading')} {config?.title || t('common.services')}...</div></main>;
   }
 
-  if (error || !category) {
+  if (error || !config) {
     return (
-      <div className="container" style={{ padding: '2.5rem 1.5rem 5rem' }}>
-        <div className="card" style={{ padding: '2rem', textAlign: 'center' }}>
-          <p style={{ color: '#991b1b', marginBottom: '1rem' }}>{error || 'Unable to find this category.'}</p>
-          <Link to="/services" className="btn btn-primary">Back to Services</Link>
-        </div>
-      </div>
+      <main className="services-page-container">
+        <div className="services-state services-state-error" role="alert">{error || t('services.unavailable')}</div>
+        <Link to="/services" className="services-back-button"><ArrowLeft size={17} /> {t('services.backAll')}</Link>
+      </main>
     );
   }
 
   return (
-    <div className="container services-page-container" style={{ padding: '2.5rem 1.5rem 5rem', maxWidth: '1200px' }}>
-      <nav style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-        <Link to="/services" style={{ color: 'var(--primary)', textDecoration: 'none', fontWeight: 700 }}>Services</Link>
-        <span>›</span>
-        <span style={{ color: 'var(--text-main)', fontWeight: 700 }}>{displayName}</span>
+    <main className="services-page-container">
+      <nav className="services-breadcrumbs" aria-label="Breadcrumb">
+        <Link to="/services">{t('common.services')}</Link>
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">{config.title}</span>
       </nav>
 
-      <div className="card" style={{ padding: '2rem', marginBottom: '2rem', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-          <div>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.45rem 0.8rem', borderRadius: 999, background: '#eff6ff', color: '#1d4ed8', fontWeight: 700, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-              <Sparkles size={14} />
-              {displayName}
-            </div>
-            <h1 style={{ margin: '1rem 0 0.5rem', fontSize: '2.1rem' }}>{displayName}</h1>
-            <p style={{ color: 'var(--text-muted)', maxWidth: '760px', lineHeight: 1.7, margin: 0 }}>
-              {category.description || 'Explore verified professionals and trusted specialists in this category.'}
-            </p>
-          </div>
-
-          <Link to="/services" className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', padding: '0.8rem 1rem' }}>
-            <ArrowLeft size={16} />
-            <span>Back to Services</span>
-          </Link>
+      <header className="service-group-heading">
+        <div>
+          <div className="services-eyebrow"><Sparkles size={15} /> {config.title}</div>
+          <h1>{t('services.chooseHelp')}</h1>
+          <p>{config.description}</p>
         </div>
-      </div>
+        <Link to="/services" className="services-back-button"><ArrowLeft size={17} /> {t('services.allCategories')}</Link>
+      </header>
 
-      <div className="services-horizontal-row" aria-label={`${displayName} services`}>
-        {category.services?.length ? (
-          category.services.map((service) => (
+      {taskCards.length ? (
+        <section className="service-task-grid" aria-label={`${config.title} subservices`}>
+          {taskCards.map(({ task, service }) => (
             <Link
-              key={service.id}
-              to={`/services/${category.slug}/${service.slug}`}
-              style={{
-                textDecoration: 'none',
-                color: 'inherit',
-                display: 'block',
-                background: '#fff',
-                border: '1px solid var(--border)',
-                borderRadius: '22px',
-                padding: '1.4rem',
-                boxShadow: '0 12px 28px rgba(15, 23, 42, 0.04)',
-                transition: 'transform 0.18s ease, box-shadow 0.18s ease',
-              }}
+              className="service-task-card"
+              key={`${task.slug}-${service.id}`}
+              to={`/services/${service.categorySlug}/${service.slug}?task=${encodeURIComponent(task.slug)}`}
             >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.9rem' }}>
-                <div style={{ width: '44px', height: '44px', borderRadius: '14px', background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1d4ed8' }}>
-                  <Sparkles size={20} />
+              <ServiceCardImage
+                src={task.image}
+                alt={task.imageAlt}
+                className="service-task-image"
+              />
+              <div className="service-task-content">
+                <div className="service-task-meta">
+                  <span>{t('common.providers', { count: service.active_providers_count || 0 })}</span>
+                  <span><MapPin size={13} /> {t('services.localService')}</span>
                 </div>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700 }}>{service.active_providers_count || 0} providers</span>
-              </div>
-
-              <h3 style={{ fontSize: '1.35rem', marginBottom: '0.5rem' }}>{service.name}</h3>
-              <p style={{ color: 'var(--text-muted)', lineHeight: 1.7, minHeight: '70px', margin: '0 0 1rem' }}>
-                {service.description || 'Tailored specialist support for this service.'}
-              </p>
-
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', borderTop: '1px solid var(--border)', paddingTop: '0.9rem' }}>
-                <div>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Starting from</div>
-                  <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--secondary)' }}>₹{Number(service.base_price || 0).toLocaleString('en-IN')}</div>
-                </div>
-
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--primary)', fontWeight: 700 }}>
-                  <span>Book now</span>
-                  <ArrowRight size={16} />
+                <h2>{task.title}</h2>
+                <p>{task.description}</p>
+                <div className="service-task-footer">
+                  <span>{t('common.from')} ₹{Number(service.base_price || 0).toLocaleString('en-IN')}</span>
+                  <span className="service-task-action">{t('services.viewProviders')} <ArrowRight size={16} /></span>
                 </div>
               </div>
             </Link>
-          ))
-        ) : (
-          <div className="card" style={{ padding: '2.5rem', textAlign: 'center', gridColumn: '1 / -1', color: 'var(--text-muted)' }}>
-            No active services are available in this group right now.
-          </div>
-        )}
-      </div>
-    </div>
+          ))}
+        </section>
+      ) : (
+        <div className="services-state">{t('services.empty')}</div>
+      )}
+    </main>
   );
 }

@@ -1,7 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { useI18n } from '../context/I18nContext';
+import LocationPicker from '../components/LocationPicker';
+import ProviderDocumentsPanel from '../components/ProviderDocumentsPanel';
+import AdminProviderVerification from '../components/AdminProviderVerification';
 import {
   Users,
   Calendar,
@@ -27,15 +31,19 @@ import {
   Send,
   MessageSquare,
   AlertTriangle,
-  Info
+  Info,
+  LogOut
 } from 'lucide-react';
 
 export default function Dashboard() {
-  const { user, isProvider, isAdmin, isUser, updateUser } = useAuth();
+  const { user, isProvider, isAdmin, isUser, updateUser, logout } = useAuth();
+  const { t } = useI18n();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Active Tab state synced with URL search params
   const tabParam = searchParams.get('tab');
+  const providerApplicationSubmitted = searchParams.get('providerApplication') === 'submitted';
   const [activeTab, setActiveTab] = useState(
     tabParam || (isAdmin ? 'analytics' : isProvider ? 'overview' : 'bookings')
   );
@@ -49,6 +57,11 @@ export default function Dashboard() {
   const switchTab = (tab) => {
     setActiveTab(tab);
     setSearchParams({ tab });
+  };
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
   };
 
   const [loading, setLoading] = useState(true);
@@ -66,18 +79,19 @@ export default function Dashboard() {
   // ================= PROVIDER STATE =================
   const [providerProfile, setProviderProfile] = useState(null);
   const [providerBookings, setProviderBookings] = useState([]);
+  const [providerProblemImages, setProviderProblemImages] = useState({});
+  const providerProblemImageUrls = useRef(new Set());
   const [myServices, setMyServices] = useState([]);
   const [allCategories, setAllCategories] = useState([]);
   const [catalogServices, setCatalogServices] = useState([]);
 
   // Provider Publish Service Form State
   const [pubCategory, setPubCategory] = useState('');
-  const [pubServiceName, setPubServiceName] = useState('');
   const [pubDesc, setPubDesc] = useState('');
   const [pubExp, setPubExp] = useState('5 years');
   const [pubPrice, setPubPrice] = useState('');
-  const [pubLocation, setPubLocation] = useState('');
-  const [pubRadius, setPubRadius] = useState(15);
+  const [pubServiceId, setPubServiceId] = useState('');
+  const [pubLocationDetails, setPubLocationDetails] = useState({ address: '', latitude: null, longitude: null, radius_km: 15 });
   const [pubAvailability, setPubAvailability] = useState('Monday - Saturday, 9:00 AM - 7:00 PM');
   const [pubSubmitting, setPubSubmitting] = useState(false);
   const [pubMsg, setPubMsg] = useState('');
@@ -86,7 +100,7 @@ export default function Dashboard() {
   const [editBusinessName, setEditBusinessName] = useState('');
   const [editBio, setEditBio] = useState('');
   const [editExperienceYears, setEditExperienceYears] = useState(0);
-  const [editAddress, setEditAddress] = useState('');
+  const [editProviderLocation, setEditProviderLocation] = useState({ address: '', latitude: null, longitude: null, radius_km: 15 });
   const [savingProfile, setSavingProfile] = useState(false);
 
   // ================= USER STATE =================
@@ -101,6 +115,22 @@ export default function Dashboard() {
   useEffect(() => {
     loadDashboardData();
   }, [user, activeTab]);
+
+  useEffect(() => () => {
+    providerProblemImageUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    providerProblemImageUrls.current.clear();
+  }, []);
+
+  const loadProviderProblemImage = async (booking) => {
+    try {
+      const imageBlob = await api.download(booking.problem_image_url);
+      const imageUrl = URL.createObjectURL(imageBlob);
+      providerProblemImageUrls.current.add(imageUrl);
+      setProviderProblemImages((current) => ({ ...current, [booking.id]: imageUrl }));
+    } catch (error) {
+      alert(error.message || 'The uploaded problem image could not be loaded.');
+    }
+  };
 
   const loadDashboardData = async () => {
     if (!user) return;
@@ -149,9 +179,19 @@ export default function Dashboard() {
         setEditBusinessName(pProfile.business_name || '');
         setEditBio(pProfile.bio || '');
         setEditExperienceYears(pProfile.experience_years || 0);
-        setEditAddress(pProfile.address || '');
-        if (!pubLocation && pProfile.address) {
-          setPubLocation(pProfile.address);
+        setEditProviderLocation({
+          address: pProfile.address || '',
+          latitude: pProfile.latitude,
+          longitude: pProfile.longitude,
+          radius_km: pProfile.service_radius_km || 15,
+        });
+        if (!pubLocationDetails.address && pProfile.address) {
+          setPubLocationDetails({
+            address: pProfile.address,
+            latitude: pProfile.latitude,
+            longitude: pProfile.longitude,
+            radius_km: pProfile.service_radius_km || 15,
+          });
         }
       } else {
         const [uBookings, savedLocation] = await Promise.all([
@@ -215,21 +255,26 @@ export default function Dashboard() {
     }
   };
 
-  const handleToggleProviderVerify = async (providerId, currentVerify) => {
-    try {
-      await api.patch(`/admin/providers/${providerId}/verify`, { is_verified: !currentVerify });
-      loadDashboardData();
-    } catch (err) {
-      alert(err.message || 'Error updating provider verification');
-    }
-  };
-
   const handleAdminCancelBooking = async (bookingId) => {
     const reason = window.prompt('Enter cancellation reason:', 'Cancelled by administrator.');
     if (!reason) return;
     try {
-      await api.patch(`/admin/bookings/${bookingId}/cancel`, { reason });
-      alert('Booking cancelled and email notification sent to customer!');
+      const result = await api.patch(`/admin/bookings/${bookingId}/cancel`, { reason });
+      alert(`Booking cancelled. Customer email: ${(result.email_status || 'queued').toLowerCase().replace('_', ' ')}.`);
+      loadDashboardData();
+    } catch (err) {
+      alert(err.message || 'Error cancelling booking');
+    }
+  };
+
+  const handleCustomerCancelBooking = async (bookingId) => {
+    if (!window.confirm('Cancel this booking request?')) return;
+    try {
+      const result = await api.patch(`/bookings/${bookingId}/status`, {
+        status: 'CANCELLED',
+        reason: 'Cancelled by customer.',
+      });
+      alert(`Booking cancelled. Customer email: ${(result.email_status || 'queued').toLowerCase().replace('_', ' ')}.`);
       loadDashboardData();
     } catch (err) {
       alert(err.message || 'Error cancelling booking');
@@ -249,8 +294,13 @@ export default function Dashboard() {
   // ================= PROVIDER ACTIONS =================
   const handlePublishService = async (e) => {
     e.preventDefault();
-    if (!pubServiceName || !pubPrice) {
-      alert('Please provide at least a service name and base price.');
+    const service = catalogServices.find((item) => String(item.id) === String(pubServiceId));
+    if (!service || !pubPrice || !pubLocationDetails.address || pubLocationDetails.latitude == null || pubLocationDetails.longitude == null) {
+      alert('Choose a catalog service, price, and saved map location.');
+      return;
+    }
+    if (providerProfile?.verification_status !== 'APPROVED') {
+      alert('Your provider verification must be approved before publishing service offers.');
       return;
     }
 
@@ -259,19 +309,23 @@ export default function Dashboard() {
 
     try {
       const res = await api.post('/providers/me/services', {
-        category_name: pubCategory || 'Home Services',
-        service_name: pubServiceName.trim(),
+        category_id: service.category_id,
+        service_id: service.id,
+        category_name: service.category_name || pubCategory,
+        service_name: service.name,
         description: pubDesc,
         experience: pubExp,
         base_price: Number(pubPrice),
-        service_location: pubLocation || providerProfile?.address,
-        service_radius: Number(pubRadius),
+        service_location: pubLocationDetails.address,
+        service_latitude: Number(pubLocationDetails.latitude),
+        service_longitude: Number(pubLocationDetails.longitude),
+        service_radius: Number(pubLocationDetails.radius_km || 15),
         availability: pubAvailability,
         is_active: true
       });
 
       setPubMsg(res.message || 'Service submitted successfully for admin review!');
-      setPubServiceName('');
+      setPubServiceId('');
       setPubDesc('');
       setPubPrice('');
       loadDashboardData();
@@ -280,6 +334,22 @@ export default function Dashboard() {
     } finally {
       setPubSubmitting(false);
     }
+  };
+
+  const handleEditMyService = (service) => {
+    setPubCategory(service.category_name || '');
+    setPubServiceId(String(service.service_id));
+    setPubDesc(service.description || '');
+    setPubExp(service.experience || '');
+    setPubPrice(String(service.base_price || ''));
+    setPubAvailability(service.availability || '');
+    setPubLocationDetails({
+      address: service.service_location || providerProfile?.address || '',
+      latitude: service.service_latitude ?? providerProfile?.latitude ?? null,
+      longitude: service.service_longitude ?? providerProfile?.longitude ?? null,
+      radius_km: service.service_radius || 15,
+    });
+    document.getElementById('provider-service-form')?.scrollIntoView({ behavior: 'smooth' });
   };
 
   const handleToggleMyServiceActive = async (psId) => {
@@ -302,11 +372,16 @@ export default function Dashboard() {
   };
 
   const handleProviderBookingStatusChange = async (bookingId, newStatus) => {
+    const reason = newStatus === 'REJECTED'
+      ? window.prompt('Please provide a reason for rejecting this booking:')
+      : null;
+    if (newStatus === 'REJECTED' && !reason?.trim()) return;
     try {
-      const res = await api.patch(`/bookings/${bookingId}/status`, { status: newStatus });
-      alert(
-        `Booking ${newStatus}! ${res.email_notified ? 'Notification email dispatched to customer.' : ''}`
-      );
+      const res = await api.patch(`/bookings/${bookingId}/status`, { status: newStatus, reason });
+      const emailMessage = res.email_status
+        ? ` Customer email: ${res.email_status.toLowerCase().replace('_', ' ')}.`
+        : '';
+      alert(`Booking ${newStatus}.${emailMessage}`);
       loadDashboardData();
     } catch (err) {
       alert(err.message || 'Error updating booking');
@@ -321,7 +396,10 @@ export default function Dashboard() {
         business_name: editBusinessName,
         bio: editBio,
         experience_years: Number(editExperienceYears),
-        address: editAddress
+        address: editProviderLocation.address,
+        latitude: editProviderLocation.latitude,
+        longitude: editProviderLocation.longitude,
+        service_radius_km: Number(editProviderLocation.radius_km || 15),
       });
       alert('Profile updated successfully!');
       loadDashboardData();
@@ -387,7 +465,7 @@ export default function Dashboard() {
   };
 
   const handleToggleAvailability = async () => {
-    if (!providerProfile) return;
+    if (!providerProfile || providerProfile.verification_status !== 'APPROVED') return;
     const newAvail = !providerProfile.is_available;
     try {
       await api.put('/providers/me/profile', { is_available: newAvail });
@@ -423,22 +501,28 @@ export default function Dashboard() {
               <h1 style={{ fontSize: '1.85rem' }}>{user.full_name}</h1>
               <span className="badge badge-primary">{user.role}</span>
               {isProvider && providerProfile && (
-                <button
-                  onClick={handleToggleAvailability}
-                  style={{
-                    cursor: 'pointer',
-                    background: providerProfile.is_available ? '#ecfdf5' : '#fef2f2',
-                    color: providerProfile.is_available ? '#065f46' : '#991b1b',
-                    border: '1px solid currentColor',
-                    borderRadius: 'var(--radius-full)',
-                    padding: '0.2rem 0.65rem',
-                    fontSize: '0.75rem',
-                    fontWeight: 700
-                  }}
-                  title="Click to toggle availability"
-                >
-                  {providerProfile.is_available ? '● Online & Accepting Jobs' : '○ Offline / Busy'}
-                </button>
+                <>
+                  <span className={`badge ${providerProfile.verification_status === 'APPROVED' ? 'badge-success' : 'badge-warning'}`}>
+                    Verification: {providerProfile.verification_status}
+                  </span>
+                  <button
+                    onClick={handleToggleAvailability}
+                    disabled={providerProfile.verification_status !== 'APPROVED'}
+                    style={{
+                      cursor: providerProfile.verification_status === 'APPROVED' ? 'pointer' : 'not-allowed',
+                      background: providerProfile.is_available ? '#ecfdf5' : '#fef2f2',
+                      color: providerProfile.is_available ? '#065f46' : '#991b1b',
+                      border: '1px solid currentColor',
+                      borderRadius: 'var(--radius-full)',
+                      padding: '0.2rem 0.65rem',
+                      fontSize: '0.75rem',
+                      fontWeight: 700
+                    }}
+                    title="Only approved providers can accept bookings"
+                  >
+                    {providerProfile.is_available ? 'Online & Accepting Jobs' : 'Offline / Busy'}
+                  </button>
+                </>
               )}
             </div>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
@@ -485,6 +569,13 @@ export default function Dashboard() {
                 <span>Providers ({adminStats?.total_providers || 0})</span>
               </button>
               <button
+                onClick={() => switchTab('verification')}
+                className={`btn btn-sm ${activeTab === 'verification' ? 'btn-primary' : 'btn-secondary'}`}
+              >
+                <Shield size={15} />
+                <span>Provider Verification</span>
+              </button>
+              <button
                 onClick={() => switchTab('bookings')}
                 className={`btn btn-sm ${activeTab === 'bookings' ? 'btn-primary' : 'btn-secondary'}`}
               >
@@ -497,6 +588,13 @@ export default function Dashboard() {
               >
                 <Star size={15} />
                 <span>Reviews ({adminStats?.total_reviews || 0})</span>
+              </button>
+              <button
+                onClick={() => switchTab('profile')}
+                className={`btn btn-sm ${activeTab === 'profile' ? 'btn-primary' : 'btn-secondary'}`}
+              >
+                <UserCheck size={15} />
+                <span>Profile</span>
               </button>
             </>
           ) : isProvider ? (
@@ -827,7 +925,7 @@ export default function Dashboard() {
                           <th style={{ padding: '0.75rem 0.5rem' }}>Address</th>
                           <th style={{ padding: '0.75rem 0.5rem' }}>Rating</th>
                           <th style={{ padding: '0.75rem 0.5rem' }}>Services</th>
-                          <th style={{ padding: '0.75rem 0.5rem' }}>Verified</th>
+                          <th style={{ padding: '0.75rem 0.5rem' }}>Verification</th>
                           <th style={{ padding: '0.75rem 0.5rem' }}>Availability</th>
                           <th style={{ padding: '0.75rem 0.5rem' }}>Action</th>
                         </tr>
@@ -845,8 +943,8 @@ export default function Dashboard() {
                               <span className="badge badge-primary">{p.approved_services} live / {p.total_services} total</span>
                             </td>
                             <td style={{ padding: '0.75rem 0.5rem' }}>
-                              <span className={`badge ${p.is_verified ? 'badge-success' : 'badge-danger'}`}>
-                                {p.is_verified ? 'Verified' : 'Unverified'}
+                              <span className={`badge ${p.verification_status === 'APPROVED' ? 'badge-success' : 'badge-warning'}`}>
+                                {p.verification_status}
                               </span>
                             </td>
                             <td style={{ padding: '0.75rem 0.5rem' }}>
@@ -856,11 +954,11 @@ export default function Dashboard() {
                             </td>
                             <td style={{ padding: '0.75rem 0.5rem' }}>
                               <button
-                                onClick={() => handleToggleProviderVerify(p.id, p.is_verified)}
+                                onClick={() => switchTab('verification')}
                                 className="btn btn-secondary btn-sm"
                                 style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
                               >
-                                {p.is_verified ? 'Unverify' : 'Verify'}
+                                Review
                               </button>
                             </td>
                           </tr>
@@ -870,6 +968,8 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
+
+              {activeTab === 'verification' && <AdminProviderVerification />}
 
               {/* TAB 5: BOOKING MANAGEMENT */}
               {activeTab === 'bookings' && (
@@ -957,6 +1057,19 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
+
+              {activeTab === 'profile' && (
+                <section className="card account-profile-card">
+                  <div className="customer-profile-avatar">{user.full_name?.[0]?.toUpperCase() || 'A'}</div>
+                  <span className="customer-profile-kicker">Administrator account</span>
+                  <h2>{user.full_name}</h2>
+                  <p>{user.email}</p>
+                  <button type="button" onClick={handleLogout} className="btn btn-secondary account-logout-button">
+                    <LogOut size={16} />
+                    <span>Log out</span>
+                  </button>
+                </section>
+              )}
             </div>
           )}
 
@@ -968,6 +1081,27 @@ export default function Dashboard() {
               {/* TAB: OVERVIEW */}
               {activeTab === 'overview' && (
                 <div>
+                  {providerProfile?.verification_status !== 'APPROVED' && (
+                    <div className="provider-verification-notice" role="status">
+                      <strong>Account verification: {providerProfile?.verification_status || 'PENDING'}</strong>
+                      <p>
+                        {providerProfile?.verification_status === 'SUSPENDED'
+                          ? 'Your account is suspended. Contact an administrator for next steps.'
+                          : providerProfile?.verification_status === 'REJECTED'
+                            ? 'Your application was rejected. Review the administrator feedback below, update your documents, and contact the administrator to resubmit.'
+                            : 'Upload your identity and qualification documents for administrator review. Publishing services and accepting bookings are enabled after approval.'}
+                      </p>
+                      {providerProfile?.verification_reason && (
+                        <p><strong>{t('admin.reviewReasonLabel')}:</strong> {providerProfile.verification_reason}</p>
+                      )}
+                      {providerApplicationSubmitted && (
+                        <p className="provider-application-success" role="status">
+                          {t('auth.providerApplicationSubmitted')}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {['PENDING', 'REJECTED'].includes(providerProfile?.verification_status) && <ProviderDocumentsPanel />}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
                     <div className="card" style={{ padding: '1.25rem' }}>
                       <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 600 }}>Total Service Requests</div>
@@ -1026,7 +1160,7 @@ export default function Dashboard() {
                   <div className="card" style={{ padding: '1.75rem', marginBottom: '2rem', borderTop: '4px solid var(--primary)' }}>
                     <h3 style={{ fontSize: '1.25rem', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <Plus size={18} color="var(--primary)" />
-                      <span>Publish a New Service</span>
+                      <span>{pubServiceId ? 'Update Service Offer' : 'Publish a New Service'}</span>
                     </h3>
                     <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
                       Enter your service details. After submission, your service will be reviewed and approved by the marketplace administrator.
@@ -1038,14 +1172,22 @@ export default function Dashboard() {
                       </div>
                     )}
 
-                    <form onSubmit={handlePublishService} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    {providerProfile?.verification_status !== 'APPROVED' && (
+                      <p className="provider-verification-notice" role="status">
+                        Your account must be approved before you can publish active service offers. Upload your required documents from the overview.
+                      </p>
+                    )}
+                    <form id="provider-service-form" onSubmit={handlePublishService} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                       <div>
                         <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.35rem' }}>
                           Service Category
                         </label>
                         <select
                           value={pubCategory}
-                          onChange={(e) => setPubCategory(e.target.value)}
+                          onChange={(e) => {
+                            setPubCategory(e.target.value);
+                            setPubServiceId('');
+                          }}
                           className="form-input"
                           style={{ width: '100%', padding: '0.65rem' }}
                         >
@@ -1060,15 +1202,20 @@ export default function Dashboard() {
                         <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.35rem' }}>
                           Service Name *
                         </label>
-                        <input
-                          type="text"
+                        <select
                           required
-                          placeholder="e.g. AC Repair, Bathroom Plumbing, Jet Wash..."
-                          value={pubServiceName}
-                          onChange={(e) => setPubServiceName(e.target.value)}
+                          value={pubServiceId}
+                          onChange={(e) => setPubServiceId(e.target.value)}
                           className="form-input"
                           style={{ width: '100%', padding: '0.65rem' }}
-                        />
+                        >
+                          <option value="">Select a catalog service...</option>
+                          {catalogServices
+                            .filter((service) => !pubCategory || service.category_name === pubCategory)
+                            .map((service) => (
+                              <option key={service.id} value={service.id}>{service.name}</option>
+                            ))}
+                        </select>
                       </div>
 
                       <div>
@@ -1101,32 +1248,11 @@ export default function Dashboard() {
                         />
                       </div>
 
-                      <div>
-                        <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.35rem' }}>
-                          Service Location (City / Area)
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="e.g. Koramangala, Sector 4, Indiranagar"
-                          value={pubLocation}
-                          onChange={(e) => setPubLocation(e.target.value)}
-                          className="form-input"
-                          style={{ width: '100%', padding: '0.65rem' }}
-                        />
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.35rem' }}>
-                          Service Radius (km)
-                        </label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="100"
-                          value={pubRadius}
-                          onChange={(e) => setPubRadius(e.target.value)}
-                          className="form-input"
-                          style={{ width: '100%', padding: '0.65rem' }}
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <LocationPicker
+                          value={pubLocationDetails}
+                          onChange={setPubLocationDetails}
+                          label="Service location and coverage"
                         />
                       </div>
 
@@ -1160,11 +1286,11 @@ export default function Dashboard() {
                       <div style={{ gridColumn: '1 / -1', marginTop: '0.5rem' }}>
                         <button
                           type="submit"
-                          disabled={pubSubmitting}
+                          disabled={pubSubmitting || providerProfile?.verification_status !== 'APPROVED'}
                           className="btn btn-primary"
                           style={{ padding: '0.65rem 1.75rem' }}
                         >
-                          {pubSubmitting ? 'Submitting Service...' : 'Submit Service for Admin Approval'}
+                          {pubSubmitting ? 'Saving Service...' : pubServiceId ? 'Update Service for Admin Review' : 'Submit Service for Admin Approval'}
                         </button>
                       </div>
                     </form>
@@ -1221,8 +1347,16 @@ export default function Dashboard() {
 
                             <div style={{ display: 'flex', gap: '0.5rem' }}>
                               <button
+                                onClick={() => handleEditMyService(s)}
+                                className="btn btn-secondary btn-sm"
+                              >
+                                <Edit3 size={14} />
+                                Edit
+                              </button>
+                              <button
                                 onClick={() => handleToggleMyServiceActive(s.id)}
                                 className="btn btn-secondary btn-sm"
+                                disabled={providerProfile?.verification_status !== 'APPROVED' || s.status !== 'APPROVED'}
                               >
                                 {s.is_active ? 'Pause Offering' : 'Activate Offering'}
                               </button>
@@ -1281,6 +1415,25 @@ export default function Dashboard() {
                             <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--secondary)' }}>
                               Total Booking Value: ₹{b.total_amount}
                             </div>
+                            {b.problem_image_url && (
+                              <div style={{ marginTop: '0.65rem' }}>
+                                {providerProblemImages[b.id] ? (
+                                  <img
+                                    src={providerProblemImages[b.id]}
+                                    alt={`Customer issue photo for ${b.service_name}`}
+                                    style={{ width: 150, height: 110, objectFit: 'cover', borderRadius: 8 }}
+                                  />
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => loadProviderProblemImage(b)}
+                                  >
+                                    View customer issue photo
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
 
                           <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -1289,6 +1442,7 @@ export default function Dashboard() {
                                 <button
                                   onClick={() => handleProviderBookingStatusChange(b.id, 'ACCEPTED')}
                                   className="btn btn-primary btn-sm"
+                                  disabled={providerProfile?.verification_status !== 'APPROVED'}
                                   style={{ background: '#059669', borderColor: '#059669' }}
                                 >
                                   Accept & Confirm
@@ -1296,6 +1450,7 @@ export default function Dashboard() {
                                 <button
                                   onClick={() => handleProviderBookingStatusChange(b.id, 'REJECTED')}
                                   className="btn btn-secondary btn-sm"
+                                  disabled={providerProfile?.verification_status !== 'APPROVED'}
                                   style={{ color: '#dc2626' }}
                                 >
                                   Reject Request
@@ -1369,15 +1524,10 @@ export default function Dashboard() {
                       />
                     </div>
                     <div style={{ gridColumn: '1 / -1' }}>
-                      <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.35rem' }}>
-                        Primary Workshop / Dispatch Address
-                      </label>
-                      <input
-                        type="text"
-                        value={editAddress}
-                        onChange={(e) => setEditAddress(e.target.value)}
-                        className="form-input"
-                        style={{ width: '100%', padding: '0.65rem' }}
+                      <LocationPicker
+                        value={editProviderLocation}
+                        onChange={setEditProviderLocation}
+                        label="Primary service location and coverage"
                       />
                     </div>
                     <div style={{ gridColumn: '1 / -1' }}>
@@ -1395,6 +1545,10 @@ export default function Dashboard() {
                     <div style={{ gridColumn: '1 / -1' }}>
                       <button type="submit" disabled={savingProfile} className="btn btn-primary">
                         {savingProfile ? 'Saving...' : 'Save Profile Changes'}
+                      </button>
+                      <button type="button" onClick={handleLogout} className="btn btn-secondary account-logout-button">
+                        <LogOut size={16} />
+                        <span>Log out</span>
                       </button>
                     </div>
                   </form>
@@ -1422,6 +1576,10 @@ export default function Dashboard() {
                     <CalendarCheck size={17} />
                     <span>{userBookings.length} service booking{userBookings.length === 1 ? '' : 's'}</span>
                   </div>
+                  <button type="button" onClick={handleLogout} className="btn btn-secondary account-logout-button">
+                    <LogOut size={16} />
+                    <span>Log out</span>
+                  </button>
                 </section>
 
                 <section className="card customer-profile-editor">
@@ -1521,12 +1679,7 @@ export default function Dashboard() {
                       <div>
                         {b.status === 'PENDING' && (
                           <button
-                            onClick={async () => {
-                              if (window.confirm('Cancel this booking request?')) {
-                                await api.patch(`/bookings/${b.id}/status`, { status: 'CANCELLED' });
-                                loadDashboardData();
-                              }
-                            }}
+                            onClick={() => handleCustomerCancelBooking(b.id)}
                             className="btn btn-secondary btn-sm"
                             style={{ color: '#dc2626' }}
                           >

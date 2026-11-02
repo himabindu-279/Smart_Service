@@ -7,6 +7,7 @@ from app.models.provider_service import ProviderService
 from app.models.service import Service
 from app.models.user import User
 from app.utils.geo import haversine_distance, geocode_location, suggest_locations
+from app.api.deps import require_admin
 
 router = APIRouter()
 
@@ -59,8 +60,7 @@ def get_nearby_providers(
         .filter(
             User.is_active == True,
             Provider.is_available == True,
-            Provider.latitude.isnot(None),
-            Provider.longitude.isnot(None),
+            Provider.verification_status == "APPROVED",
             ProviderService.is_active == True,
             ProviderService.status == ServiceApprovalStatus.APPROVED
         )
@@ -75,32 +75,34 @@ def get_nearby_providers(
     seen_providers = set()
 
     for provider, ps in pairs:
-        # Avoid duplicate provider cards when no service filter is passed
         if not service_id and provider.id in seen_providers:
             continue
+
+        service_latitude = ps.service_latitude if ps.service_latitude is not None else provider.latitude
+        service_longitude = ps.service_longitude if ps.service_longitude is not None else provider.longitude
+        if service_latitude is None or service_longitude is None:
+            continue
+        dist = haversine_distance(latitude, longitude, service_latitude, service_longitude)
+        if dist > min(radius_km, ps.service_radius_km):
+            continue
+        user = db.query(User).filter(User.id == provider.user_id).first()
+        svc = db.query(Service).filter(Service.id == ps.service_id).first()
         seen_providers.add(provider.id)
-
-        dist = haversine_distance(latitude, longitude, provider.latitude, provider.longitude)
-        if dist <= radius_km:
-            user = db.query(User).filter(User.id == provider.user_id).first()
-            svc = db.query(Service).filter(Service.id == ps.service_id).first()
-            svc_name = ps.custom_service_name or (svc.name if svc else "General Service")
-
-            nearby.append({
-                "provider_id": provider.id,
-                "provider_service_id": ps.id,
-                "provider_name": provider.business_name or (user.full_name if user else "Provider"),
-                "service": svc_name,
-                "service_id": ps.service_id,
-                "latitude": float(provider.latitude),
-                "longitude": float(provider.longitude),
-                "distance": round(dist, 2),
-                "rating": float(provider.rating_avg or 4.8),
-                "total_ratings": int(provider.total_ratings or 15),
-                "availability": "Available Today" if provider.is_available else "Busy",
-                "price": float(ps.custom_price or (svc.base_price if svc else 500.0)),
-                "address": provider.address or "Verified Service Center"
-            })
+        nearby.append({
+            "provider_id": provider.id,
+            "provider_service_id": ps.id,
+            "provider_name": provider.business_name or (user.full_name if user else "Provider"),
+            "service": ps.custom_service_name or (svc.name if svc else "Service"),
+            "service_id": ps.service_id,
+            "latitude": float(service_latitude),
+            "longitude": float(service_longitude),
+            "distance": round(dist, 2),
+            "rating": float(provider.rating_avg),
+            "total_ratings": int(provider.total_ratings),
+            "availability": ps.availability_hours,
+            "price": float(ps.custom_price),
+            "address": ps.service_location or provider.address
+        })
 
     nearby.sort(key=lambda x: x["distance"])
     return nearby
@@ -126,20 +128,9 @@ def sync_demo_providers_near_location(
 
 @router.post("/reset-bengaluru-providers")
 @router.post("/reset-bengaluru-providers/")
-def reset_bengaluru_providers(db: Session = Depends(get_db)):
-    """Reset provider coordinates back to standard Bengaluru locations."""
-    bengaluru_coords = [
-        (12.9116, 77.6389, "HSR Layout, Bengaluru"),
-        (12.9352, 77.6245, "Koramangala, Bengaluru"),
-        (12.9784, 77.6408, "Indiranagar, Bengaluru"),
-        (12.9250, 77.5938, "Jayanagar, Bengaluru"),
-        (12.9165, 77.6101, "BTM Layout, Bengaluru"),
-    ]
-    providers = db.query(Provider).all()
-    for idx, p in enumerate(providers):
-        lat, lon, addr = bengaluru_coords[idx % len(bengaluru_coords)]
-        p.latitude = lat
-        p.longitude = lon
-        p.address = addr
-    db.commit()
-    return {"message": "Providers reset to Bengaluru locations", "updated": len(providers)}
+def reset_bengaluru_providers(
+    db: Session = Depends(get_db),
+    _current_admin: User = Depends(require_admin),
+):
+    """Retain the legacy URL without changing verified provider location data."""
+    return {"message": "Location reset is disabled; update the provider's saved map pin instead.", "updated": 0}

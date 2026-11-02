@@ -15,4 +15,12 @@ from app.models import (
     Recommendation,
     ChatConversation,
     ChatMessage,
+    EmailVerification,
+    ProviderDocument,
+    ProviderVerification,
+    BookingEmailOutbox,
+    CartItem,
+    ServiceOrder,
+    Notification,
+    ProblemImage,
 )
